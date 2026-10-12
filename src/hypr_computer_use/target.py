@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-TargetKind = Literal["host", "realm"]
+TargetKind = Literal["host", "nest"]
 
 
 class TargetError(RuntimeError):
@@ -86,7 +86,7 @@ def live_instances(runtime: str) -> list[Instance]:
 def host_target(environ: Mapping[str, str], exclude: frozenset[str] = frozenset()) -> Target:
   """The user's own session: from the env if present, else the newest live instance.
 
-  `exclude` holds signatures that must never be treated as the host (the realm, which is itself
+  `exclude` holds signatures that must never be treated as the host (the nest, which is itself
   a newer Hyprland instance).
 
   Raises:

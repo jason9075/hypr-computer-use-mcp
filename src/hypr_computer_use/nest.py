@@ -1,12 +1,12 @@
-"""Lifecycle of the agent realm: a nested Hyprland in a window on an ordinary host workspace.
+"""Lifecycle of the agent nest: a nested Hyprland in a window on an ordinary host workspace.
 
 The nested instance gives the agent its own seat, cursor and focus, so it never touches the
 human's input. Its host window usually sits on a hidden workspace, where Hyprland would stop
 sending it frame callbacks and the nested compositor would stall; the `render_unfocused` window
 rule keeps callbacks coming at `misc:render_unfocused_fps` (15 by default) instead.
 
-An earlier design parked the realm on a headless monitor to keep it "visible". Headless outputs
-have no vblank, so host and realm ping-ponged frames unthrottled (~500-700 FPS, about 1.3 CPU
+An earlier design parked the nest on a headless monitor to keep it "visible". Headless outputs
+have no vblank, so host and nest ping-ponged frames unthrottled (~500-700 FPS, about 1.3 CPU
 cores); the rule-based approach costs a few percent.
 """
 
@@ -27,7 +27,7 @@ from .target import Target, live_instances, pid_alive
 
 log = logging.getLogger(__name__)
 
-REALM_WS = int(os.environ.get("HYPR_CU_REALM_WS", "1"))
+NEST_WS = int(os.environ.get("HYPR_CU_NEST_WS", "1"))
 STARTUP_TIMEOUT_S = 20.0
 RECLAIM_WINDOW_S = 5.0
 
@@ -52,13 +52,13 @@ ecosystem {
 
 
 def user_config_path() -> Path:
-  """Optional user additions to the realm's Hyprland config (e.g. a launcher keybind)."""
+  """Optional user additions to the nest's Hyprland config (e.g. a launcher keybind)."""
   base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-  return Path(base, "hypr-cu", "realm.conf")
+  return Path(base, "hypr-cu", "nest.conf")
 
 
 def nested_config(user_config: Path) -> str:
-  """The realm's config: the bare defaults, plus a `source` of the user's file when present.
+  """The nest's config: the bare defaults, plus a `source` of the user's file when present.
 
   Sourced only if it exists, since Hyprland reports a missing `source` as a config error.
   """
@@ -67,12 +67,12 @@ def nested_config(user_config: Path) -> str:
   return NESTED_CONFIG
 
 
-class RealmError(RuntimeError):
-  """The realm could not be started or is unusable."""
+class NestError(RuntimeError):
+  """The nest could not be started or is unusable."""
 
 
 @dataclass(frozen=True, slots=True)
-class RealmState:
+class NestState:
   """What `up` recorded about the running nested instance."""
 
   signature: str
@@ -90,40 +90,40 @@ def activity_path(runtime: str) -> Path:
 
 
 def mark_activity(runtime: str) -> None:
-  """Record that the agent just acted on the realm."""
+  """Record that the agent just acted on the nest."""
   try:
     activity_path(runtime).touch()
   except OSError as exc:
     log.debug("cannot mark activity: %s", exc)
 
 
-def read_state(runtime: str) -> RealmState | None:
-  """The recorded realm, or None if never started or the record is unreadable."""
+def read_state(runtime: str) -> NestState | None:
+  """The recorded nest, or None if never started or the record is unreadable."""
   try:
-    return RealmState(**json.loads((state_dir(runtime) / "realm.json").read_text()))
+    return NestState(**json.loads((state_dir(runtime) / "nest.json").read_text()))
   except (OSError, ValueError, TypeError):
     return None
 
 
-def _write_state(runtime: str, state: RealmState) -> None:
-  path = state_dir(runtime) / "realm.json"
+def _write_state(runtime: str, state: NestState) -> None:
+  path = state_dir(runtime) / "nest.json"
   path.parent.mkdir(parents=True, exist_ok=True)
   path.write_text(json.dumps(asdict(state)))
 
 
-def as_target(state: RealmState, runtime: str) -> Target:
-  return Target("realm", state.signature, state.wayland_display, runtime)
+def as_target(state: NestState, runtime: str) -> Target:
+  return Target("nest", state.signature, state.wayland_display, runtime)
 
 
-def problem(host: Target, state: RealmState | None) -> str | None:
-  """Why the realm is unusable, or None if it is healthy."""
+def problem(host: Target, state: NestState | None) -> str | None:
+  """Why the nest is unusable, or None if it is healthy."""
   if state is None:
-    return "realm is not started"
+    return "nest is not started"
   if not pid_alive(state.pid):
-    return "realm compositor has exited"
+    return "nest compositor has exited"
   # The nested instance survives its host window being closed, but then has no outputs.
   if not hypr.monitors(as_target(state, host.runtime_dir)):
-    return "realm window was closed"
+    return "nest window was closed"
   return None
 
 
@@ -132,12 +132,12 @@ def _activation_env(host: Target) -> dict[str, str]:
   return dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
 
 
-def reclaim_activation_env(host: Target, state: RealmState) -> bool:
-  """Point the systemd/dbus activation environment back at the host if the realm took it over.
+def reclaim_activation_env(host: Target, state: NestState) -> bool:
+  """Point the systemd/dbus activation environment back at the host if the nest took it over.
 
   Every Hyprland, nested ones included, exports its WAYLAND_DISPLAY and instance signature there
   on startup, and on exit unsets the signature while leaving its WAYLAND_DISPLAY behind. Left
-  alone, user services (re)started afterwards, such as the status bar, attach to the realm or to
+  alone, user services (re)started afterwards, such as the status bar, attach to the nest or to
   a dead socket. Returns whether anything was changed.
   """
   try:
@@ -159,11 +159,11 @@ def reclaim_activation_env(host: Target, state: RealmState) -> bool:
     hypr.run("dbus-update-activation-environment", *pairs, target=host)
   except hypr.CommandError as exc:
     log.warning("dbus activation environment not restored: %s", exc)
-  log.info("reclaimed activation environment from the realm")
+  log.info("reclaimed activation environment from the nest")
   return True
 
 
-def _reclaim_after_start(host: Target, state: RealmState) -> None:
+def _reclaim_after_start(host: Target, state: NestState) -> None:
   # The export happens shortly after the compositor is up, so wait for it rather than racing it.
   deadline = time.monotonic() + RECLAIM_WINDOW_S
   while time.monotonic() < deadline:
@@ -175,11 +175,11 @@ def _reclaim_after_start(host: Target, state: RealmState) -> None:
 CLIENT_GRACE_S = 5.0
 
 
-def realm_clients(signature: str) -> list[int]:
-  """PIDs of programs launched inside the realm, found by the instance signature they inherit.
+def nest_clients(signature: str) -> list[int]:
+  """PIDs of programs launched inside the nest, found by the instance signature they inherit.
 
   They are not reliably children of the compositor (a dying parent hands them to init), and
-  Wayland clients may outlive their compositor: a realm Firefox kept running, holding its
+  Wayland clients may outlive their compositor: a nest Firefox kept running, holding its
   profile lock, after the nested instance exited.
   """
   needle = f"HYPRLAND_INSTANCE_SIGNATURE={signature}\0".encode()
@@ -224,29 +224,29 @@ def _kill_leftovers(config: Path) -> None:
       continue
 
 
-def _stop_compositor(state: RealmState, runtime: str) -> None:
+def _stop_compositor(state: NestState, runtime: str) -> None:
   # Close apps while their display still exists so they can shut down cleanly.
-  terminate(realm_clients(state.signature))
+  terminate(nest_clients(state.signature))
   if not pid_alive(state.pid):
-    _kill_leftovers(state_dir(runtime) / "realm.conf")
+    _kill_leftovers(state_dir(runtime) / "nest.conf")
     return
   try:
     hypr.dispatch(as_target(state, runtime), "exit")
   except hypr.CommandError:
-    log.warning("realm did not accept exit; sending SIGTERM")
+    log.warning("nest did not accept exit; sending SIGTERM")
   deadline = time.monotonic() + 3
   while pid_alive(state.pid) and time.monotonic() < deadline:
     time.sleep(0.1)
   if pid_alive(state.pid):
     os.kill(state.pid, signal.SIGTERM)
-  _kill_leftovers(state_dir(runtime) / "realm.conf")
+  _kill_leftovers(state_dir(runtime) / "nest.conf")
 
 
 def up(host: Target) -> Target:
-  """Start the realm (or repair a broken one) and return it as a Target.
+  """Start the nest (or repair a broken one) and return it as a Target.
 
   Raises:
-    RealmError: if the nested compositor does not come up.
+    NestError: if the nested compositor does not come up.
   """
   runtime = host.runtime_dir
   state = read_state(runtime)
@@ -258,13 +258,13 @@ def up(host: Target) -> Target:
 
   sdir = state_dir(runtime)
   sdir.mkdir(parents=True, exist_ok=True)
-  config, log_file = sdir / "realm.conf", sdir / "realm.log"
+  config, log_file = sdir / "nest.conf", sdir / "nest.log"
   config.write_text(nested_config(user_config_path()))
 
   before = {inst.signature for inst in live_instances(runtime)}
   inner = f"exec Hyprland --config {shlex.quote(str(config))} > {shlex.quote(str(log_file))} 2>&1"
   # Exec rules apply at map time only; render_unfocused set later would not take effect.
-  rules = f"workspace {REALM_WS} silent; render_unfocused on"
+  rules = f"workspace {NEST_WS} silent; render_unfocused on"
   hypr.dispatch(host, "exec", f"[{rules}] sh -c {shlex.quote(inner)}")
 
   deadline = time.monotonic() + STARTUP_TIMEOUT_S
@@ -272,7 +272,7 @@ def up(host: Target) -> Target:
     for inst in live_instances(runtime):
       if inst.signature in before:
         continue
-      candidate = RealmState(inst.signature, inst.wayland_display, inst.pid)
+      candidate = NestState(inst.signature, inst.wayland_display, inst.pid)
       try:
         ready = bool(hypr.monitors(as_target(candidate, runtime)))
       except hypr.CommandError:
@@ -282,16 +282,16 @@ def up(host: Target) -> Target:
         _reclaim_after_start(host, candidate)
         return as_target(candidate, runtime)
     time.sleep(0.25)
-  raise RealmError(f"nested Hyprland did not come up within {STARTUP_TIMEOUT_S}s; see {log_file}")
+  raise NestError(f"nested Hyprland did not come up within {STARTUP_TIMEOUT_S}s; see {log_file}")
 
 
 def down(host: Target) -> None:
-  """Stop the realm. Safe to call when nothing is running."""
+  """Stop the nest. Safe to call when nothing is running."""
   runtime = host.runtime_dir
   state = read_state(runtime)
   if state is not None:
     _stop_compositor(state, runtime)
     # After the stop: the exiting compositor rewrites the environment one last time.
     reclaim_activation_env(host, state)
-  (state_dir(runtime) / "realm.json").unlink(missing_ok=True)
+  (state_dir(runtime) / "nest.json").unlink(missing_ok=True)
   activity_path(runtime).unlink(missing_ok=True)

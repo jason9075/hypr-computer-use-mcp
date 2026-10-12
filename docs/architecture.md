@@ -9,8 +9,8 @@ flowchart LR
   end
   subgraph server["hypr-computer-use-mcp"]
     S[server.py<br/>MCP tools]
-    T[target.py<br/>host / realm 辨識]
-    R[realm.py<br/>生命週期]
+    T[target.py<br/>host / nest 辨識]
+    R[nest.py<br/>生命週期]
     H[hypr.py<br/>外部指令]
     V[vpointer.py<br/>drag]
   end
@@ -18,21 +18,21 @@ flowchart LR
     HDMI[ws2..10<br/>使用者的 workspace]
     WS1[ws1（通常隱藏）<br/>render_unfocused 15 FPS]
   end
-  subgraph realm["Realm：nested Hyprland（wayland-2）"]
+  subgraph nest["Nest：nested Hyprland（wayland-2）"]
     APP[Firefox / GIMP / ...]
   end
 
   CC -- stdio --> S
   S --> T & R & H & V
   R -- hyprctl dispatch exec --> WS1
-  WS1 -- realm 視窗 --> realm
-  H -- grim / wtype / wlrctl / hyprctl --> realm
-  V -- wlr-virtual-pointer --> realm
+  WS1 -- nest 視窗 --> nest
+  H -- grim / wtype / wlrctl / hyprctl --> nest
+  V -- wlr-virtual-pointer --> nest
 ```
 
-Agent 透過 stdio 跟 MCP server 溝通。server 把每個 tool call 轉成對 **realm** 的外部指令
-（`grim`、`wtype`、`wlrctl`、`hyprctl`）或 Wayland 協定呼叫。所有指令都帶著 realm 的
-`WAYLAND_DISPLAY` 和 `HYPRLAND_INSTANCE_SIGNATURE`，因此只會作用在 realm。
+Agent 透過 stdio 跟 MCP server 溝通。server 把每個 tool call 轉成對 **nest** 的外部指令
+（`grim`、`wtype`、`wlrctl`、`hyprctl`）或 Wayland 協定呼叫。所有指令都帶著 nest 的
+`WAYLAND_DISPLAY` 和 `HYPRLAND_INSTANCE_SIGNATURE`，因此只會作用在 nest。
 
 ## 模組分工
 
@@ -40,11 +40,11 @@ Agent 透過 stdio 跟 MCP server 溝通。server 把每個 tool call 轉成對 
 |---|---|---|
 | `geometry.py` | 截圖座標 ↔ Hyprland 全域 logical 座標（處理位置、scale、旋轉） | 純函式 |
 | `keys.py` | `"ctrl+shift+t"` → `wtype` 參數 | 純函式 |
-| `target.py` | 決定要操作哪個 session（host 或 realm），並產生對應的 env | 只讀 lock 檔 |
+| `target.py` | 決定要操作哪個 session（host 或 nest），並產生對應的 env | 只讀 lock 檔 |
 | `hypr.py` | 包裝 `hyprctl`、`grim`、`wtype`、`wlrctl`；每個呼叫都要指定 `Target` | 有 |
-| `realm.py` | realm 的啟動、健康檢查、修復、關閉 | 有 |
+| `nest.py` | nest 的啟動、健康檢查、修復、關閉 | 有 |
 | `vpointer.py` | 透過 wlr-virtual-pointer 做按住拖曳 | 有 |
-| `server.py` | MCP tools 和 CLI（`realm up\|down\|status`） | 有 |
+| `server.py` | MCP tools 和 CLI（`nest up\|down\|status`） | 有 |
 | `protocols/` | pywayland bindings，**build 時生成**（見 [lessons-learned](lessons-learned.md#6-vendored-bindings-在部署時-import-失敗)） | — |
 
 設計原則是「純函式在內、副作用在外」：座標換算和按鍵解析都有單元測試，外部指令集中在 `hypr.py`。
@@ -54,23 +54,23 @@ Agent 透過 stdio 跟 MCP server 溝通。server 把每個 tool call 轉成對 
 ```python
 @dataclass(frozen=True)
 class Target:
-  kind: Literal["host", "realm"]
+  kind: Literal["host", "nest"]
   signature: str          # HYPRLAND_INSTANCE_SIGNATURE
   wayland_display: str    # 例如 wayland-2
   runtime_dir: str        # $XDG_RUNTIME_DIR
 ```
 
 `hypr.run(*args, target=...)` 會把這三個值覆蓋到子行程的環境變數，所以同一支 `grim` 可以截
-host，也可以截 realm，取決於傳入哪個 `Target`。
+host，也可以截 nest，取決於傳入哪個 `Target`。
 
-### 怎麼找到 host 和 realm
+### 怎麼找到 host 和 nest
 
-- **realm**：`realm up` 成功後把 signature、display、pid 寫進 `$XDG_RUNTIME_DIR/hypr-cu/realm.json`。
+- **nest**：`nest up` 成功後把 signature、display、pid 寫進 `$XDG_RUNTIME_DIR/hypr-cu/nest.json`。
 - **host**：優先使用環境變數；沒有的話，掃描 `$XDG_RUNTIME_DIR/hypr/*/hyprland.lock`
-  （內容是 PID 和 Wayland socket 名稱），挑最新的、還活著的 instance，**但要排除 realm**。
+  （內容是 PID 和 Wayland socket 名稱），挑最新的、還活著的 instance，**但要排除 nest**。
 
-排除 realm 這點很重要：realm 本身也是一個 Hyprland instance，而且比 host 新。Codex 這類 MCP host
-會剝掉環境變數，如果只挑「最新的」，就會把 realm 誤認成 host。
+排除 nest 這點很重要：nest 本身也是一個 Hyprland instance，而且比 host 新。Codex 這類 MCP host
+會剝掉環境變數，如果只挑「最新的」，就會把 nest 誤認成 host。
 
 ## 一次 tool call 的流程
 
@@ -80,26 +80,26 @@ host，也可以截 realm，取決於傳入哪個 `Target`。
 sequenceDiagram
   participant A as Agent
   participant S as server.py
-  participant R as realm.json
-  participant N as Realm（wayland-2）
+  participant R as nest.json
+  participant N as Nest（wayland-2）
 
   A->>S: click(400, 300)
-  S->>R: 讀取 realm 狀態
-  S->>S: problem() 健康檢查<br/>（pid 活著？realm 有 output？）
+  S->>R: 讀取 nest 狀態
+  S->>S: problem() 健康檢查<br/>（pid 活著？nest 有 output？）
   S->>S: to_global(viewport, 400, 300)<br/>截圖座標 → logical 座標
   S->>N: hyprctl dispatch movecursor X Y
   S->>N: wlrctl pointer click left
   S-->>A: "left x1 at (400, 300)"
 ```
 
-realm 不健康時（沒啟動、compositor 結束了、視窗被關掉），tool 會回傳明確的錯誤，例如
-`realm window was closed; call start_realm first`，**不會**悄悄改去操作使用者的桌面。
+nest 不健康時（沒啟動、compositor 結束了、視窗被關掉），tool 會回傳明確的錯誤，例如
+`nest window was closed; call start_nest first`，**不會**悄悄改去操作使用者的桌面。
 
 ## Tools 一覽
 
 | 類別 | Tools |
 |---|---|
-| realm 管理 | `start_realm`、`stop_realm` |
+| nest 管理 | `start_nest`、`stop_nest` |
 | 開程式 | `open_url`、`launch` |
 | 觀察 | `screenshot`、`list_monitors`、`list_windows`、`cursor_position` |
 | 操作 | `click`、`scroll`、`mouse_move`、`drag`、`type_text`、`key`、`focus_window` |
@@ -110,7 +110,7 @@ realm 不健康時（沒啟動、compositor 結束了、視窗被關掉），too
 
 | 路徑（`$XDG_RUNTIME_DIR/hypr-cu/`） | 內容 | 用途 |
 |---|---|---|
-| `realm.json` | realm 的 signature、display、PID | server 定位 realm；status bar 判斷 realm 是否在跑 |
+| `nest.json` | nest 的 signature、display、PID | server 定位 nest；status bar 判斷 nest 是否在跑 |
 | `activity` | 空檔案，mtime 是最後一次 tool call 的時間 | status bar 判斷 agent 是否正在操作 |
-| `realm.conf` | nested Hyprland 的 config | 由 `realm up` 生成 |
-| `realm.log` | nested Hyprland 的輸出 | 除錯用 |
+| `nest.conf` | nested Hyprland 的 config | 由 `nest up` 生成 |
+| `nest.log` | nested Hyprland 的輸出 | 除錯用 |

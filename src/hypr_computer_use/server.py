@@ -1,6 +1,6 @@
 """MCP server exposing computer-use tools for a Hyprland session.
 
-By default every tool acts on the *realm*: a nested Hyprland in a window on its own workspace that
+By default every tool acts on the *nest*: a nested Hyprland in a window on its own workspace that
 gives the agent its own seat, cursor and focus. Set HYPR_CU_TARGET=host to drive the user's own
 desktop.
 """
@@ -20,7 +20,7 @@ from typing import Any, Literal
 from mcp.server.fastmcp import FastMCP, Image
 from mcp.types import ToolAnnotations
 
-from . import hypr, realm, vpointer
+from . import hypr, nest, vpointer
 from .geometry import Viewport, interpolate, to_global, to_local, viewport_from_monitor
 from .keys import wtype_args
 from .target import Target, TargetError, host_target, runtime_dir
@@ -28,7 +28,7 @@ from .target import Target, TargetError, host_target, runtime_dir
 log = logging.getLogger("hypr_computer_use")
 
 MAX_EDGE = int(os.environ.get("HYPR_CU_MAX_EDGE", "1280"))
-MODE = os.environ.get("HYPR_CU_TARGET", "realm")
+MODE = os.environ.get("HYPR_CU_TARGET", "nest")
 SCROLL_UNIT = 15  # wl_pointer axis value of one wheel notch
 SETTLE_S = 0.05  # let the compositor deliver motion before a click lands
 
@@ -37,12 +37,12 @@ Button = Literal["left", "right", "middle"]
 READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
 ACTION = ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=False)
 
-_REALM_GUIDE = (
-  "You operate inside a private 'realm': a separate Hyprland desktop on the user's workspace "
-  f"{realm.REALM_WS}, with its own cursor and keyboard focus, so you never disturb the user. "
-  "Call `start_realm` first if it is not running, then open apps with `open_url` or `launch`. "
-  "The user can watch or take over by switching to that workspace; call `stop_realm` when the "
-  "task is done. While hidden the realm renders at about 15 FPS, so allow a moment after acting "
+_NEST_GUIDE = (
+  "You operate inside a private 'nest': a separate Hyprland desktop on the user's workspace "
+  f"{nest.NEST_WS}, with its own cursor and keyboard focus, so you never disturb the user. "
+  "Call `start_nest` first if it is not running, then open apps with `open_url` or `launch`. "
+  "The user can watch or take over by switching to that workspace; call `stop_nest` when the "
+  "task is done. While hidden the nest renders at about 15 FPS, so allow a moment after acting "
   "before judging a screenshot."
 )
 _HOST_GUIDE = (
@@ -52,7 +52,7 @@ _HOST_GUIDE = (
 mcp = FastMCP(
   "hypr-computer-use",
   instructions=(
-    (_REALM_GUIDE if MODE == "realm" else _HOST_GUIDE)
+    (_NEST_GUIDE if MODE == "nest" else _HOST_GUIDE)
     + " Call `screenshot` before acting: every x/y argument is in pixels of the most recent "
     "screenshot image. Take a new screenshot after acting to verify the result."
   ),
@@ -64,7 +64,7 @@ _viewports: dict[str, Viewport] = {}
 
 
 def _host() -> Target:
-  state = realm.read_state(runtime_dir(os.environ))
+  state = nest.read_state(runtime_dir(os.environ))
   return host_target(os.environ, frozenset({state.signature}) if state else frozenset())
 
 
@@ -72,13 +72,13 @@ def _target() -> Target:
   host = _host()
   if MODE == "host":
     return host
-  state = realm.read_state(host.runtime_dir)
-  why = realm.problem(host, state)
+  state = nest.read_state(host.runtime_dir)
+  why = nest.problem(host, state)
   if why is not None:
-    raise TargetError(f"{why}; call start_realm first")
+    raise TargetError(f"{why}; call start_nest first")
   assert state is not None
-  realm.mark_activity(host.runtime_dir)
-  return realm.as_target(state, host.runtime_dir)
+  nest.mark_activity(host.runtime_dir)
+  return nest.as_target(state, host.runtime_dir)
 
 
 def _monitor(target: Target, name: str | None) -> dict[str, Any]:
@@ -102,16 +102,16 @@ def _move(target: Target, x: int, y: int) -> None:
 
 # Prompts that would otherwise cost the agent a screenshot-and-click on every launch.
 FIREFOX_PREFS = {
-  "browser.sessionstore.resume_from_crash": False,  # realm stops kill Firefox
+  "browser.sessionstore.resume_from_crash": False,  # nest stops kill Firefox
   "browser.translations.automaticallyPopup": False,
   "browser.aboutwelcome.enabled": False,
   "datareporting.policy.dataSubmissionPolicyBypassNotification": True,
-  "layout.frame_rate": -1,  # undo an earlier cap; video ignores it and hidden realms run at 15
+  "layout.frame_rate": -1,  # undo an earlier cap; video ignores it and hidden nests run at 15
 }
 
 
 def _firefox_profile() -> Path:
-  """The realm's persistent Firefox profile, with agent-friendly prefs (re)applied."""
+  """The nest's persistent Firefox profile, with agent-friendly prefs (re)applied."""
   data = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
   profile = Path(data, "hypr-cu", "firefox-profile")
   profile.mkdir(parents=True, exist_ok=True)
@@ -123,26 +123,26 @@ def _firefox_profile() -> Path:
 
 
 @mcp.tool(annotations=ACTION)
-def start_realm() -> str:
-  """Start the agent realm (idempotent; also repairs a broken one)."""
+def start_nest() -> str:
+  """Start the agent nest (idempotent; also repairs a broken one)."""
   if MODE == "host":
-    return "HYPR_CU_TARGET=host: acting on the user's desktop, no realm needed"
-  target = realm.up(_host())
+    return "HYPR_CU_TARGET=host: acting on the user's desktop, no nest needed"
+  target = nest.up(_host())
   _viewports.pop(target.signature, None)
-  return f"realm running on workspace {realm.REALM_WS} ({target.wayland_display})"
+  return f"nest running on workspace {nest.NEST_WS} ({target.wayland_display})"
 
 
 @mcp.tool(annotations=ACTION)
-def stop_realm() -> str:
-  """Stop the realm and everything running inside it."""
-  realm.down(_host())
+def stop_nest() -> str:
+  """Stop the nest and everything running inside it."""
+  nest.down(_host())
   _viewports.clear()
-  return "realm stopped"
+  return "nest stopped"
 
 
 @mcp.tool(annotations=ACTION)
 def open_url(url: str) -> str:
-  """Open a URL in the realm's Firefox (persistent profile, so logins survive restarts)."""
+  """Open a URL in the nest's Firefox (persistent profile, so logins survive restarts)."""
   target = _target()
   firefox = [c for c in hypr.clients(target) if c["class"] == "firefox"]
   if firefox:
@@ -290,33 +290,33 @@ def key(combo: str) -> str:
   return f"pressed {combo}"
 
 
-def _realm_cli(action: str) -> int:
+def _nest_cli(action: str) -> int:
   host = _host()
   if action == "up":
-    print(f"realm up: {realm.up(host).wayland_display}")
+    print(f"nest up: {nest.up(host).wayland_display}")
   elif action == "down":
-    realm.down(host)
-    print("realm down")
+    nest.down(host)
+    print("nest down")
   else:
-    why = realm.problem(host, realm.read_state(host.runtime_dir))
-    print("realm healthy" if why is None else f"realm unavailable: {why}")
+    why = nest.problem(host, nest.read_state(host.runtime_dir))
+    print("nest healthy" if why is None else f"nest unavailable: {why}")
     return 0 if why is None else 1
   return 0
 
 
 def main() -> None:
-  """Entry point: serve MCP over stdio, or manage the realm (`realm up|down|status`).
+  """Entry point: serve MCP over stdio, or manage the nest (`nest up|down|status`).
 
   Logs go to stderr since stdout carries the protocol.
   """
   logging.basicConfig(level=os.environ.get("HYPR_CU_LOG", "WARNING"))
   parser = argparse.ArgumentParser(prog="hypr-computer-use-mcp")
   sub = parser.add_subparsers(dest="cmd")
-  realm_cmd = sub.add_parser("realm", help="manage the agent realm")
-  realm_cmd.add_argument("action", choices=["up", "down", "status"])
+  nest_cmd = sub.add_parser("nest", help="manage the agent nest")
+  nest_cmd.add_argument("action", choices=["up", "down", "status"])
   args = parser.parse_args()
-  if args.cmd == "realm":
-    sys.exit(_realm_cli(args.action))
+  if args.cmd == "nest":
+    sys.exit(_nest_cli(args.action))
   mcp.run()
 
 

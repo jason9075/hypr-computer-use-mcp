@@ -31,7 +31,7 @@ class Viewport:
 截圖用 `grim -o <monitor> -s <factor>`。`grim` 的 `-s` 是相對於 logical 尺寸的比例，所以截出來的圖
 剛好就是 `Viewport.image_size`，不需要再用 Pillow 縮放。
 
-每個 session（host 或 realm）各自記住最後一張截圖的 `Viewport`，避免兩邊的座標混在一起。
+每個 session（host 或 nest）各自記住最後一張截圖的 `Viewport`，避免兩邊的座標混在一起。
 
 ## 點擊與捲動：`wlrctl`
 
@@ -56,7 +56,7 @@ wlrctl pointer scroll DY DX        # 一格滾輪 = 15 個 axis 單位
 
 `wtype` 送出的按鍵會經過 input method。fcitx5 注音開著時，打 `https://...` 會變成「ㄏㄩㄥ」。所以在
 host 模式下，打字前先用 `fcitx5-remote -c` 暫時關掉 IME，結束後如果原本是開著的，就用
-`fcitx5-remote -o` 再打開。realm 裡沒有跑 input method，所以不需要這麼做。
+`fcitx5-remote -o` 再打開。nest 裡沒有跑 input method，所以不需要這麼做。
 
 ### 限制：Hyprland keybind 不吃 virtual keyboard
 
@@ -69,7 +69,7 @@ host 模式下，打字前先用 `fcitx5-remote -c` 暫時關掉 IME，結束後
 
 | 嘗試 | 結果 |
 |---|---|
-| evdev `/dev/uinput` | ❌ uinput 是 kernel 層的裝置，事件只會進 **host** 的 seat，到不了 realm；而且還需要額外的 group 權限 |
+| evdev `/dev/uinput` | ❌ uinput 是 kernel 層的裝置，事件只會進 **host** 的 seat，到不了 nest；而且還需要額外的 group 權限 |
 | virtual pointer + `motion_absolute` | ❌ 只在起點留下一個點，後面的移動都沒有被當成拖曳 |
 | virtual pointer + 相對 `motion` | ✅ tldraw 的矩形、箭頭、畫筆線條、GIMP 的筆刷都正確 |
 

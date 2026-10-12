@@ -5,35 +5,35 @@ fighting you for the mouse and keyboard.
 
 > 📖 Detailed design notes (Traditional Chinese): [docs/](docs/README.md)
 
-## How it works: the realm
+## How it works: the nest
 
-By default the agent works in a **realm**: a nested Hyprland instance running in a window on
+By default the agent works in a **nest**: a nested Hyprland instance running in a window on
 workspace 1.
 
 ```
 your Hyprland (wayland-1)
 ├── ws2..10 … your workspaces, your cursor, your focus — untouched
-└── ws1 (usually hidden) → realm window → nested Hyprland (wayland-2)
+└── ws1 (usually hidden) → nest window → nested Hyprland (wayland-2)
                                           ├── own seat, cursor, keyboard focus
                                           └── agent's Firefox (persistent profile)
 ```
 
 - All screenshots and input are addressed to the nested display, so nothing reaches your session.
 - A hidden workspace normally stops receiving frame callbacks, which would stall the nested
-  compositor. The realm window is launched with the `render_unfocused` rule, so Hyprland keeps
+  compositor. The nest window is launched with the `render_unfocused` rule, so Hyprland keeps
   driving it at `misc:render_unfocused_fps` (15) while you work elsewhere.
 - Watch or take over by switching to workspace 1 like any other workspace.
 
-Cost while hidden: about 4% CPU (host + nested). An earlier design parked the realm on a headless
+Cost while hidden: about 4% CPU (host + nested). An earlier design parked the nest on a headless
 monitor instead; with no vblank to pace it, the two compositors ping-ponged frames at ~500-700 FPS
-for over a full core. See [docs/realm.md](docs/realm.md).
+for over a full core. See [docs/nest.md](docs/nest.md).
 
 ## Tools
 
 | Tool | Notes |
 |---|---|
-| `start_realm` / `stop_realm` | Idempotent; `start_realm` also repairs a realm whose window was closed; `stop_realm` also closes the apps inside |
-| `open_url` | Realm Firefox with a persistent profile (`$XDG_DATA_HOME/hypr-cu/firefox-profile`), so logins survive restarts; prompts like session restore and translation are pre-disabled |
+| `start_nest` / `stop_nest` | Idempotent; `start_nest` also repairs a nest whose window was closed; `stop_nest` also closes the apps inside |
+| `open_url` | Nest Firefox with a persistent profile (`$XDG_DATA_HOME/hypr-cu/firefox-profile`), so logins survive restarts; prompts like session restore and translation are pre-disabled |
 | `launch` | Start any program in the session |
 | `screenshot`, `list_monitors`, `list_windows`, `cursor_position` | Read-only |
 | `click`, `scroll`, `mouse_move`, `drag`, `type_text`, `key`, `focus_window` | x/y are pixels of the latest screenshot |
@@ -66,11 +66,11 @@ just install          # registers `hypr-computer-use-mcp` from PATH
 just install-dev      # or: `nix run <this checkout>` for development
 ```
 
-## Customising the realm
+## Customising the nest
 
-If `$XDG_CONFIG_HOME/hypr-cu/realm.conf` exists, the realm's generated Hyprland config `source`s
+If `$XDG_CONFIG_HOME/hypr-cu/nest.conf` exists, the nest's generated Hyprland config `source`s
 it, e.g. for a wallpaper and a launcher. Host binds own SUPER and take precedence, so use another
-modifier inside the realm:
+modifier inside the nest:
 
 ```
 exec-once = swaybg -i ~/Pictures/agent-wallpaper.png -m fill
@@ -81,17 +81,17 @@ bind = ALT, F, exec, rofi -show drun
 
 ```sh
 hypr-computer-use-mcp                 # serve MCP over stdio
-hypr-computer-use-mcp realm up        # start (or repair) the realm
-hypr-computer-use-mcp realm status    # exit 1 with the reason when unusable
-hypr-computer-use-mcp realm down
+hypr-computer-use-mcp nest up        # start (or repair) the nest
+hypr-computer-use-mcp nest status    # exit 1 with the reason when unusable
+hypr-computer-use-mcp nest down
 ```
 
 ## Environment
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `HYPR_CU_TARGET` | `realm` | `host` drives your live desktop instead (no isolation) |
-| `HYPR_CU_REALM_WS` | `1` | Host workspace holding the realm window |
+| `HYPR_CU_TARGET` | `nest` | `host` drives your live desktop instead (no isolation) |
+| `HYPR_CU_NEST_WS` | `1` | Host workspace holding the nest window |
 | `HYPR_CU_MAX_EDGE` | `1280` | Long edge of screenshots in pixels |
 | `HYPR_CU_LOG` | `WARNING` | Python log level (stderr) |
 
@@ -100,7 +100,7 @@ hypr-computer-use-mcp realm down
 ```sh
 direnv allow          # or: nix develop
 just check            # lint + tests + nix build
-just realm up         # manage the realm from the checkout
+just nest up         # manage the nest from the checkout
 just protocols        # regenerate the vendored wlr-virtual-pointer bindings
 ```
 
@@ -108,9 +108,9 @@ just protocols        # regenerate the vendored wlr-virtual-pointer bindings
 
 - `hyprctl` and `Hyprland` come from the host PATH so they always match the running compositor.
 - MCP hosts that strip the environment are handled: sessions are recovered from
-  `$XDG_RUNTIME_DIR/hypr/*/hyprland.lock`, and the realm is never mistaken for the host.
+  `$XDG_RUNTIME_DIR/hypr/*/hyprland.lock`, and the nest is never mistaken for the host.
 - In host mode an active fcitx5 is suspended around `type_text` / `key`; it would otherwise
-  swallow the virtual keystrokes. The realm runs no input method.
+  swallow the virtual keystrokes. The nest runs no input method.
 - Hyprland ignores absolute virtual-pointer motion as a drag source while a button is held, so
   drags are replayed as relative motion and corrected against the real cursor.
 - Hyprland keybinds are not triggered by virtual-keyboard events; use `focus_window` instead of
@@ -118,5 +118,5 @@ just protocols        # regenerate the vendored wlr-virtual-pointer bindings
 
 ## Safety
 
-Even in a realm, apps run as your user with your home directory and network. Only sign in to
+Even in a nest, apps run as your user with your home directory and network. Only sign in to
 accounts you're willing to let the agent use, and keep these tools out of auto-allow lists.

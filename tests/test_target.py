@@ -33,27 +33,27 @@ def test_skips_dead_instances(tmp_path):
     host_target({"XDG_RUNTIME_DIR": str(tmp_path)})
 
 
-def test_excludes_realm_even_if_newest(tmp_path):
+def test_excludes_nest_even_if_newest(tmp_path):
   _instance(tmp_path, "sig_host", os.getpid(), "wayland-1")
-  _instance(tmp_path, "sig_realm", os.getpid(), "wayland-2")
-  # The realm's lock is newer, which a naive "newest instance" pick would choose.
+  _instance(tmp_path, "sig_nest", os.getpid(), "wayland-2")
+  # The nest's lock is newer, which a naive "newest instance" pick would choose.
   os.utime(tmp_path / "hypr" / "sig_host" / "hyprland.lock", (0, 0))
-  t = host_target({"XDG_RUNTIME_DIR": str(tmp_path)}, frozenset({"sig_realm"}))
+  t = host_target({"XDG_RUNTIME_DIR": str(tmp_path)}, frozenset({"sig_nest"}))
   assert t.signature == "sig_host"
 
 
-def test_env_pointing_at_realm_is_ignored(tmp_path):
+def test_env_pointing_at_nest_is_ignored(tmp_path):
   _instance(tmp_path, "sig_host", os.getpid(), "wayland-1")
   env = {
     "XDG_RUNTIME_DIR": str(tmp_path),
-    "HYPRLAND_INSTANCE_SIGNATURE": "sig_realm",
+    "HYPRLAND_INSTANCE_SIGNATURE": "sig_nest",
     "WAYLAND_DISPLAY": "wayland-2",
   }
-  assert host_target(env, frozenset({"sig_realm"})).signature == "sig_host"
+  assert host_target(env, frozenset({"sig_nest"})).signature == "sig_host"
 
 
 def test_target_env_and_socket():
-  t = Target("realm", "sig", "wayland-2", "/run/user/1000")
+  t = Target("nest", "sig", "wayland-2", "/run/user/1000")
   env = t.env({"PATH": "/bin", "WAYLAND_DISPLAY": "wayland-1"})
   assert env["WAYLAND_DISPLAY"] == "wayland-2" and env["PATH"] == "/bin"
   assert t.socket_path == "/run/user/1000/wayland-2"

@@ -1,21 +1,21 @@
 import os
 import subprocess
 
-from hypr_computer_use.realm import (
+from hypr_computer_use.nest import (
   NESTED_CONFIG,
-  RealmState,
+  NestState,
   _write_state,
   activity_path,
   mark_activity,
+  nest_clients,
   nested_config,
   read_state,
-  realm_clients,
   terminate,
 )
 
 
 def test_state_round_trip(tmp_path):
-  state = RealmState("sig", "wayland-2", 1234)
+  state = NestState("sig", "wayland-2", 1234)
   _write_state(str(tmp_path), state)
   assert read_state(str(tmp_path)) == state
 
@@ -23,12 +23,12 @@ def test_state_round_trip(tmp_path):
 def test_missing_or_corrupt_state_is_none(tmp_path):
   assert read_state(str(tmp_path)) is None
   (tmp_path / "hypr-cu").mkdir()
-  (tmp_path / "hypr-cu" / "realm.json").write_text("{not json")
+  (tmp_path / "hypr-cu" / "nest.json").write_text("{not json")
   assert read_state(str(tmp_path)) is None
 
 
 def test_mark_activity_bumps_mtime(tmp_path):
-  _write_state(str(tmp_path), RealmState("sig", "wayland-2", 1))
+  _write_state(str(tmp_path), NestState("sig", "wayland-2", 1))
   mark_activity(str(tmp_path))
   first = activity_path(str(tmp_path)).stat().st_mtime_ns
   mark_activity(str(tmp_path))
@@ -39,12 +39,12 @@ def test_mark_activity_without_state_dir_is_silent(tmp_path):
   mark_activity(str(tmp_path / "missing"))
 
 
-def test_realm_clients_found_by_signature_and_terminated():
-  env = {**os.environ, "HYPRLAND_INSTANCE_SIGNATURE": "test_realm_sig_123"}
+def test_nest_clients_found_by_signature_and_terminated():
+  env = {**os.environ, "HYPRLAND_INSTANCE_SIGNATURE": "test_nest_sig_123"}
   inside = subprocess.Popen(["sleep", "30"], env=env)
   outside = subprocess.Popen(["sleep", "30"])
   try:
-    found = realm_clients("test_realm_sig_123")
+    found = nest_clients("test_nest_sig_123")
     assert inside.pid in found
     assert outside.pid not in found
     terminate(found, grace_s=2)
@@ -57,7 +57,7 @@ def test_realm_clients_found_by_signature_and_terminated():
 
 
 def test_nested_config_sources_user_file_only_when_present(tmp_path):
-  user = tmp_path / "realm.conf"
+  user = tmp_path / "nest.conf"
   assert nested_config(user) == NESTED_CONFIG
   user.write_text("bind = ALT, F, exec, rofi -show drun\n")
   assert nested_config(user).endswith(f"source = {user}\n")

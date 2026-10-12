@@ -29,9 +29,9 @@ build:
 
 check: lint test build
 
-# Manage the agent realm (nested Hyprland on a headless monitor): up | down | status.
-realm action="status":
-  python -m hypr_computer_use.server realm {{action}}
+# Manage the agent nest (nested Hyprland on a headless monitor): up | down | status.
+nest action="status":
+  python -m hypr_computer_use.server nest {{action}}
 
 # Regenerate the pywayland protocol bindings (the dev shell does this on first entry).
 protocols:

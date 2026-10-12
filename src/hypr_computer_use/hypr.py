@@ -114,7 +114,7 @@ def ime_suspended(target: Target) -> Iterator[None]:
   """Temporarily deactivate the host's fcitx5 so virtual keystrokes reach the app verbatim.
 
   An active input method intercepts wtype's events (e.g. Zhuyin turns "abc" into bopomofo
-  composition). A realm runs no input method, so only the host needs this.
+  composition). A nest runs no input method, so only the host needs this.
   """
   # fcitx5-remote prints 2 when the input method is active.
   if (

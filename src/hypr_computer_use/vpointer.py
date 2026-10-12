@@ -1,7 +1,7 @@
 """Press-and-hold pointer input over wlr-virtual-pointer, addressed to a target's compositor.
 
 wlrctl only offers atomic clicks, and a kernel uinput device would feed the *host* seat (never
-a nested realm), so drags speak the Wayland protocol directly.
+a nested nest), so drags speak the Wayland protocol directly.
 """
 
 from __future__ import annotations
