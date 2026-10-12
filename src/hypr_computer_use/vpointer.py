@@ -7,7 +7,9 @@ a nested nest), so drags speak the Wayland protocol directly.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
+from typing import Any
 
 from pywayland.client import Display
 
@@ -32,21 +34,9 @@ def _now_ms() -> int:
   return int(time.monotonic() * 1000) & 0xFFFFFFFF
 
 
-def drag(
-  target: Target,
-  path: Sequence[tuple[int, int]],
-  button: str,
-  move_to: Callable[[int, int], None],
-  cursor_pos: Callable[[], tuple[int, int]],
-) -> None:
-  """Hold `button` along `path` (global logical coords), starting with an absolute warp.
-
-  Hyprland treats absolute virtual-pointer motion as a warp, which clients don't see as a drag,
-  so the held segment is replayed as relative motion and corrected against the real cursor.
-  """
-  if len(path) < 2:
-    raise ValueError("drag path needs at least two points")
-
+@contextmanager
+def _virtual_pointer(target: Target) -> Iterator[tuple[Display, Any]]:
+  """A wlr virtual pointer on `target`'s seat, torn down in the order pywayland needs."""
   display = Display(target.socket_path)
   display.connect()
   try:
@@ -65,6 +55,51 @@ def drag(
       globals_["zwlr_virtual_pointer_manager_v1"], ZwlrVirtualPointerManagerV1, 1
     )
     pointer = manager.create_virtual_pointer(registry.bind(globals_["wl_seat"], WlSeat, 1))
+    try:
+      yield display, pointer
+    finally:
+      # Teardown order matters: pywayland segfaults if proxies outlive the connection.
+      pointer.destroy()
+      manager.destroy()
+      display.roundtrip()
+  finally:
+    display.disconnect()
+
+
+def _motion(display: Display, pointer: Any, dx: float, dy: float) -> None:
+  pointer.motion(_now_ms(), dx, dy)
+  pointer.frame()
+  display.roundtrip()
+
+
+def nudge(target: Target) -> None:
+  """Send a real (net-zero) pointer motion at the current position.
+
+  `hyprctl movecursor` warps without motion events, so clients keep a stale pointer position:
+  hover states don't update, and toolkits like GTK resolve a following click against the old
+  position (a waybar button press lands on whichever button was last entered).
+  """
+  with _virtual_pointer(target) as (display, pointer):
+    _motion(display, pointer, 1, 0)
+    _motion(display, pointer, -1, 0)
+
+
+def drag(
+  target: Target,
+  path: Sequence[tuple[int, int]],
+  button: str,
+  move_to: Callable[[int, int], None],
+  cursor_pos: Callable[[], tuple[int, int]],
+) -> None:
+  """Hold `button` along `path` (global logical coords), starting with an absolute warp.
+
+  Hyprland treats absolute virtual-pointer motion as a warp, which clients don't see as a drag,
+  so the held segment is replayed as relative motion and corrected against the real cursor.
+  """
+  if len(path) < 2:
+    raise ValueError("drag path needs at least two points")
+
+  with _virtual_pointer(target) as (display, pointer):
     code = BUTTONS[button]
 
     def send_button(pressed: bool) -> None:
@@ -72,28 +107,20 @@ def drag(
       pointer.frame()
       display.roundtrip()
 
-    def nudge(dx: float, dy: float) -> None:
-      pointer.motion(_now_ms(), dx, dy)
-      pointer.frame()
-      display.roundtrip()
-
     move_to(*path[0])
+    # Make the client see the warp before the press (see nudge()).
+    _motion(display, pointer, 1, 0)
+    _motion(display, pointer, -1, 0)
     send_button(True)
     try:
       for (x0, y0), (x1, y1) in zip(path, path[1:], strict=False):
         time.sleep(STEP_DELAY_S)
-        nudge(x1 - x0, y1 - y0)
+        _motion(display, pointer, x1 - x0, y1 - y0)
       # Pointer acceleration could make relative motion drift; land exactly on the target.
       cx, cy = cursor_pos()
       ex, ey = path[-1]
       if (cx, cy) != (ex, ey):
-        nudge(ex - cx, ey - cy)
+        _motion(display, pointer, ex - cx, ey - cy)
     finally:
       # Always release, or the button stays logically held in that session.
       send_button(False)
-      # Teardown order matters: pywayland segfaults if proxies outlive the connection.
-      pointer.destroy()
-      manager.destroy()
-      display.roundtrip()
-  finally:
-    display.disconnect()

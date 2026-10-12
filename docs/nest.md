@@ -126,7 +126,8 @@ nest 隔離的是**顯示和輸入**，不是作業系統層級的 sandbox：
 - nest 裡的程式以你的使用者身分執行，可以讀寫你的家目錄、使用網路。
 - nest 裡的 GIMP 用的是你的 `~/.config/GIMP`，最近開啟的檔案清單、筆刷設定都是共用的。
 - Firefox 例外：`open_url` 使用獨立又持久的 profile（`$XDG_DATA_HOME/hypr-cu/firefox-profile`），跟你的
-  主力 Firefox 完全分開。server 會在每次啟動前寫入 `user.js`，關掉 session 還原、翻譯提示等會打斷
+  主力 Firefox 完全分開。Firefox 的 remoting 是以 profile 為單位，所以 nest 的 Firefox 開著時，新的網址會
+  開在它的新分頁，不會跑到你的主力 Firefox。server 會在每次啟動前寫入 `user.js`，關掉 session 還原、翻譯提示等會打斷
   agent 的對話框。
 
 建議只在 nest 裡登入你願意讓 agent 使用的帳號。

@@ -64,11 +64,21 @@ xdg.configFile."hypr-cu/nest.conf".text = ''
 
 - **桌布**：nested Hyprland 預設是全黑的背景，所以在 nest 裡跑 `swaybg` 顯示 agent 專用桌布，上面印著
   操作提示。
-- **dock**：nest 底部用 `waybar` 放一條小 dock，有兩個按鈕：󰀻 開 rofi、󰅖 關閉 nest 裡 focus 中的視窗。
-  一開始用的是快捷鍵（`alt+f`），後來改成 dock，原因有兩個：host 的快捷鍵佔用了 SUPER 而且優先於 nest，
-  而且 nest 裡沒有 `super+q`（在 host 上它關的是整個 nest 的外層視窗），需要另一種關閉視窗的方式。
-- **注意**：從 nest 的 rofi 開 Firefox，會開在你主力的 Firefox 裡，因為沒有帶 `--no-remote` 和 nest
-  的 profile。要在 nest 開網頁請用 agent 的 `open_url`。
+- **dock**：nest 底部用 `waybar` 放一條小 dock：
+
+  | 按鈕 | 指令 | 為什麼這樣寫 |
+  |---|---|---|
+  | 󰈹 Firefox | `firefox --profile <nest profile> --new-window` | 跟 agent 的 `open_url` 共用 profile 和 instance，不會跑到 host |
+  | 󰆍 kitty | `kitty` | kitty 不是單一 instance，直接開就在 nest |
+  | 󰉋 Thunar | `dbus-run-session -- thunar` | Thunar 透過 D-Bus 做單一 instance，用獨立的 bus 才不會跑到 host |
+  | 󰀻 開程式 | `rofi -show drun` | |
+  | 󰅖 關閉 | `hyprctl dispatch killactive` | nest 裡沒有 `super+q`（在 host 上它關的是整個 nest） |
+
+  一開始用的是快捷鍵（`alt+f`），後來改成 dock：host 的快捷鍵佔用了 SUPER 而且優先於 nest，點擊式的
+  控制比較直觀。
+- **注意**：從 rofi 開的單一 instance 程式，如果 host 上已經開著同一個（例如 Firefox、Discord），視窗會開在
+  host。上面 dock 的按鈕就是為了避開這個問題，詳見
+  [lessons-learned](lessons-learned.md#19-從-nest-開的程式跑到-host)。
 - **關閉程式**：用 dock 的 󰅖，或程式自己的 ✕ / `ctrl+q`。在 ws1 按 `super+q` 關的是整個 nest 的外層
   視窗，裡面的程式會留在背景，要用 `nest down` 才會完整清掉。
 

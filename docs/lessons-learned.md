@@ -97,15 +97,13 @@
 
 - **解法**：`hyprctl output remove` 前先記下游標位置，移除後再移回去。
 
-## 14. 讀 YouTube 推薦時遇到的輸入問題（待修）
+## 14. 讀 YouTube 推薦時遇到的輸入問題
 
-| 現象 | 推測原因 | 暫時做法 |
+| 現象 | 原因 | 狀態 |
 |---|---|---|
-| `scroll` 在 Firefox 沒有作用 | `wlrctl` 送的滾輪事件缺少 discrete 資訊 | 改按 `Page_Down` |
-| 剛開好的頁面，按鍵送不進去 | 鍵盤 focus 還沒落在頁面上 | 先點一下頁面空白處 |
-| 游標移動後網頁的 hover 狀態不變 | `movecursor` 是 warp，不會產生 motion 事件 | 無 |
-
-這三個都可以改用 wlr-virtual-pointer 送出真正的 motion 和 discrete scroll 來解決。
+| `scroll` 在 Firefox 沒有作用 | 推測是 `wlrctl` 送的滾輪事件缺少 discrete 資訊 | 待修；暫時改按 `Page_Down` |
+| 剛開好的頁面，按鍵送不進去 | 鍵盤 focus 還沒落在頁面上 | 待修；暫時先點一下頁面空白處 |
+| 游標移動後網頁的 hover 狀態不變 | `movecursor` 是 warp，不會產生 motion 事件 | ✅ 已修，見 #18 |
 
 ## 15. Headless 螢幕讓兩層 compositor 空轉
 
@@ -145,10 +143,33 @@
 |---|---|
 | Hyprland 的 `--socket` 必須搭配 `--wayland-fd`，不能單獨使用 | 不固定 socket 名稱，改從新出現的 lock 檔辨識 nested instance |
 | nested 沒用 `start-hyprland` 啟動，會跳出 watchdog 警告 | `misc:disable_watchdog_warning = true` |
-| Firefox 會把 URL 交給 host 上已經開著的 Firefox | 加上 `--no-remote` 和獨立的 profile |
+| Firefox 會把 URL 交給 host 上已經開著的 Firefox | 用獨立的 profile（`--profile`）；Firefox 的 remoting 是以 profile 為單位，所以不會碰到 host 用預設 profile 的 Firefox。早期也加了 `--no-remote`，後來拿掉，見 #19 |
 | `focusworkspaceoncurrentmonitor` 會交換 workspace | 改用 `moveworkspacetomonitor` |
 | Hyprland keybind 不吃 virtual keyboard 送出的按鍵 | agent 改用 `focus_window` 等 IPC tool |
 | 每次開頁面都跳翻譯提示、session 還原分頁 | server 啟動 Firefox 前寫入 `user.js` 關掉這些對話框 |
+
+## 18. warp 之後的點擊被送錯按鈕
+
+- **現象**：nest 裡 waybar dock 的按鈕，重啟後第一次點擊有效，之後點其他按鈕都沒反應。
+- **根因**：`hyprctl movecursor` 只是 warp，不送 motion 事件。GTK 會用最後一次收到 motion 或 enter 時的
+  位置判斷按到哪個按鈕，所以後續的點擊都被當成點在舊位置。網頁的 hover 不更新也是同一個原因。
+- **解法**：每次 warp 之後，用 wlr-virtual-pointer 送一個來回各 1px 的相對移動（淨位移為零）。drag 的
+  起點也一樣。修好後連續點 dock 的四個按鈕都正確。
+
+## 19. 從 nest 開的程式跑到 host
+
+- **現象**：在 nest 用 rofi 開 Firefox，視窗出現在 host。
+- **根因**：單一 instance 的程式啟動時，會先找「同一個使用者 profile 是否已經有一個在跑」，有的話就叫它開新
+  視窗然後自己退出。nest 和 host 共用同一條 D-Bus session bus 和同一個家目錄，所以會找到 host 上的
+  instance。實測：kitty（不是單一 instance）、Chrome／Obsidian／Thunar（當時 host 上沒開）都正確開在
+  nest；host 上已經開著的 Firefox、Discord 則會跑去 host。
+- **解法**：
+  - Firefox：用 nest 專用的 profile。原本 `open_url` 還加了 `--no-remote`，但那會讓之後從 dock 啟動的
+    Firefox 連不上 nest 的 instance（變成「Firefox 已經在執行」），所以拿掉，改成只靠 `--profile`。
+    `open_url` 也因此簡化：Firefox 已經開著時，不再模擬 `ctrl+t` 加打字，而是直接執行
+    `firefox --profile <nest profile> <url>`，由 Firefox 自己把網址交給 nest 的 instance。
+  - Thunar：用 `dbus-run-session` 給它一條獨立的 D-Bus。
+  - Electron 程式（Discord、Slack）用的是 profile 目錄裡的 lock 檔，只能另外給一個 profile，通常不值得。
 
 ## 開發心得
 

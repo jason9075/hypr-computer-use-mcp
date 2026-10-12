@@ -97,6 +97,8 @@ def _viewport(target: Target) -> Viewport:
 
 def _move(target: Target, x: int, y: int) -> None:
   hypr.move_cursor(target, *to_global(_viewport(target), x, y))
+  # The warp alone leaves clients with a stale pointer position (no hover, misrouted clicks).
+  vpointer.nudge(target)
   time.sleep(SETTLE_S)
 
 
@@ -144,19 +146,13 @@ def stop_nest() -> str:
 def open_url(url: str) -> str:
   """Open a URL in the nest's Firefox (persistent profile, so logins survive restarts)."""
   target = _target()
-  firefox = [c for c in hypr.clients(target) if c["class"] == "firefox"]
-  if firefox:
-    hypr.dispatch(target, "focuswindow", f"address:{firefox[0]['address']}")
-    hypr.wtype(target, *wtype_args("ctrl+t"))
-    time.sleep(0.3)
-    hypr.wtype(target, "--", url)
-    hypr.wtype(target, *wtype_args("Return"))
-    return f"opened {url} in a new tab"
-  profile = _firefox_profile()
-  # --no-remote: otherwise Firefox hands the URL to the user's own instance on the host.
-  cmd = shlex.join(["firefox", "--no-remote", "--profile", str(profile), url])
+  # Firefox remoting is scoped to the profile: this reaches a Firefox already running on the
+  # nest profile (new tab) or starts one, and never the user's default-profile Firefox on the
+  # host. Avoid --no-remote, which would also block later launches (e.g. from a dock) from
+  # reaching this instance.
+  cmd = shlex.join(["firefox", "--profile", str(_firefox_profile()), url])
   hypr.dispatch(target, "exec", cmd)
-  return f"launching Firefox with {url}; take a screenshot in a few seconds"
+  return f"opening {url} in the nest Firefox; take a screenshot in a few seconds"
 
 
 @mcp.tool(annotations=ACTION)
