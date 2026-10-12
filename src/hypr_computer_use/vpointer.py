@@ -1,0 +1,98 @@
+"""Press-and-hold pointer input over wlr-virtual-pointer, addressed to a target's compositor.
+
+wlrctl only offers atomic clicks, and a kernel uinput device would feed the *host* seat (never
+a nested realm), so drags speak the Wayland protocol directly.
+"""
+
+from __future__ import annotations
+
+import time
+from collections.abc import Callable, Sequence
+
+from pywayland.client import Display
+from pywayland.protocol.wayland import WlSeat
+
+from .protocols.wlr_virtual_pointer_unstable_v1 import ZwlrVirtualPointerManagerV1
+from .target import Target
+
+BUTTONS: dict[str, int] = {
+  "left": 0x110,
+  "right": 0x111,
+  "middle": 0x112,
+}  # linux/input-event-codes.h
+STEP_DELAY_S = 0.015
+
+
+class VirtualPointerError(RuntimeError):
+  """The compositor does not offer the virtual-pointer protocol."""
+
+
+def _now_ms() -> int:
+  return int(time.monotonic() * 1000) & 0xFFFFFFFF
+
+
+def drag(
+  target: Target,
+  path: Sequence[tuple[int, int]],
+  button: str,
+  move_to: Callable[[int, int], None],
+  cursor_pos: Callable[[], tuple[int, int]],
+) -> None:
+  """Hold `button` along `path` (global logical coords), starting with an absolute warp.
+
+  Hyprland treats absolute virtual-pointer motion as a warp, which clients don't see as a drag,
+  so the held segment is replayed as relative motion and corrected against the real cursor.
+  """
+  if len(path) < 2:
+    raise ValueError("drag path needs at least two points")
+
+  display = Display(target.socket_path)
+  display.connect()
+  try:
+    registry = display.get_registry()
+    globals_: dict[str, int] = {}
+
+    def on_global(_registry: object, name: int, interface: str, _version: int) -> None:
+      globals_[interface] = name
+
+    registry.dispatcher["global"] = on_global
+    display.roundtrip()
+    if "zwlr_virtual_pointer_manager_v1" not in globals_:
+      raise VirtualPointerError(f"{target.kind} compositor lacks zwlr_virtual_pointer_manager_v1")
+
+    manager = registry.bind(
+      globals_["zwlr_virtual_pointer_manager_v1"], ZwlrVirtualPointerManagerV1, 1
+    )
+    pointer = manager.create_virtual_pointer(registry.bind(globals_["wl_seat"], WlSeat, 1))
+    code = BUTTONS[button]
+
+    def send_button(pressed: bool) -> None:
+      pointer.button(_now_ms(), code, int(pressed))
+      pointer.frame()
+      display.roundtrip()
+
+    def nudge(dx: float, dy: float) -> None:
+      pointer.motion(_now_ms(), dx, dy)
+      pointer.frame()
+      display.roundtrip()
+
+    move_to(*path[0])
+    send_button(True)
+    try:
+      for (x0, y0), (x1, y1) in zip(path, path[1:], strict=False):
+        time.sleep(STEP_DELAY_S)
+        nudge(x1 - x0, y1 - y0)
+      # Pointer acceleration could make relative motion drift; land exactly on the target.
+      cx, cy = cursor_pos()
+      ex, ey = path[-1]
+      if (cx, cy) != (ex, ey):
+        nudge(ex - cx, ey - cy)
+    finally:
+      # Always release, or the button stays logically held in that session.
+      send_button(False)
+      # Teardown order matters: pywayland segfaults if proxies outlive the connection.
+      pointer.destroy()
+      manager.destroy()
+      display.roundtrip()
+  finally:
+    display.disconnect()

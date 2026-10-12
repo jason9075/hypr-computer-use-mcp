@@ -3,7 +3,7 @@ name = "hypr-computer-use-mcp"
 version = "0.1.0"
 description = "MCP server exposing computer-use primitives for a Hyprland session"
 requires-python = ">=3.10"
-dependencies = ["mcp>=1.10", "evdev>=1.6"]
+dependencies = ["mcp>=1.10", "pywayland>=0.4.17"]
 
 [project.scripts]
 hypr-computer-use-mcp = "hypr_computer_use.server:main"
@@ -23,6 +23,7 @@ pythonpath = ["src"]
 line-length = 100
 indent-width = 2
 target-version = "py310"
+extend-exclude = ["src/hypr_computer_use/protocols"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

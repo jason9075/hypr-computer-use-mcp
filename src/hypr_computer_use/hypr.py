@@ -1,9 +1,10 @@
-"""Side-effecting wrappers around hyprctl, grim, wtype and wlrctl."""
+"""Side-effecting wrappers around hyprctl, grim, wtype and wlrctl, addressed to a Target."""
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import subprocess
 from collections.abc import Iterator
@@ -11,6 +12,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from .geometry import Viewport
+from .target import Target
 
 log = logging.getLogger(__name__)
 
@@ -21,11 +23,13 @@ class CommandError(RuntimeError):
   """An external tool failed or is missing."""
 
 
-def run(*args: str) -> bytes:
-  """Run a command and return stdout, raising CommandError with stderr on failure."""
-  log.debug("exec %s", args)
+def run(*args: str, target: Target) -> bytes:
+  """Run a command against `target`'s session; raise CommandError with its output on failure."""
+  log.debug("exec %s on %s", args, target.kind)
   try:
-    proc = subprocess.run(args, capture_output=True, timeout=TIMEOUT_S, check=False)
+    proc = subprocess.run(
+      args, capture_output=True, timeout=TIMEOUT_S, check=False, env=target.env(os.environ)
+    )
   except FileNotFoundError as exc:
     raise CommandError(f"{args[0]} not found on PATH") from exc
   except subprocess.TimeoutExpired as exc:
@@ -37,9 +41,9 @@ def run(*args: str) -> bytes:
   return proc.stdout
 
 
-def hyprctl_json(*args: str) -> Any:
+def hyprctl_json(target: Target, *args: str) -> Any:
   """Query hyprctl with JSON output."""
-  out = run("hyprctl", "-j", *args)
+  out = run("hyprctl", "-j", *args, target=target)
   try:
     return json.loads(out)
   except json.JSONDecodeError as exc:
@@ -48,62 +52,85 @@ def hyprctl_json(*args: str) -> Any:
     raise CommandError(f"hyprctl -j {' '.join(args)}: {text}") from exc
 
 
-def dispatch(*args: str) -> None:
-  """Run a Hyprland dispatcher; hyprctl exits 0 even on failure, so check the reply text."""
-  reply = run("hyprctl", "dispatch", *args).decode().strip()
-  if reply != "ok":
-    raise CommandError(f"hyprctl dispatch {' '.join(args)}: {reply}")
+def _expect_ok(args: tuple[str, ...], target: Target) -> None:
+  # hyprctl exits 0 even when a dispatcher/keyword fails, so check the reply text.
+  reply = run("hyprctl", *args, target=target).decode().strip()
+  if not all(line == "ok" for line in reply.splitlines() if line):
+    raise CommandError(f"hyprctl {' '.join(args)}: {reply}")
 
 
-def monitors() -> list[dict[str, Any]]:
-  return hyprctl_json("monitors")
+def dispatch(target: Target, *args: str) -> None:
+  """Run a Hyprland dispatcher."""
+  _expect_ok(("dispatch", *args), target)
 
 
-def clients() -> list[dict[str, Any]]:
-  return hyprctl_json("clients")
+def keyword(target: Target, *args: str) -> None:
+  """Set a Hyprland config keyword at runtime."""
+  _expect_ok(("keyword", *args), target)
 
 
-def cursor_pos() -> tuple[int, int]:
-  pos = hyprctl_json("cursorpos")
+def batch(target: Target, *commands: str) -> None:
+  """Run several hyprctl commands atomically (no input is processed in between)."""
+  _expect_ok(("--batch", "; ".join(commands)), target)
+
+
+def monitors(target: Target) -> list[dict[str, Any]]:
+  return hyprctl_json(target, "monitors")
+
+
+def clients(target: Target) -> list[dict[str, Any]]:
+  return hyprctl_json(target, "clients")
+
+
+def active_window(target: Target) -> dict[str, Any]:
+  return hyprctl_json(target, "activewindow")
+
+
+def cursor_pos(target: Target) -> tuple[int, int]:
+  pos = hyprctl_json(target, "cursorpos")
   return pos["x"], pos["y"]
 
 
-def move_cursor(gx: int, gy: int) -> None:
+def move_cursor(target: Target, gx: int, gy: int) -> None:
   """Warp the cursor to global logical coordinates."""
-  dispatch("movecursor", str(gx), str(gy))
+  dispatch(target, "movecursor", str(gx), str(gy))
 
 
-def capture(vp: Viewport) -> bytes:
+def capture(target: Target, vp: Viewport) -> bytes:
   """Screenshot a monitor as PNG at the viewport's scale."""
-  return run("grim", "-o", vp.monitor, "-s", f"{vp.factor:.6f}", "-t", "png", "-")
+  return run("grim", "-o", vp.monitor, "-s", f"{vp.factor:.6f}", "-t", "png", "-", target=target)
 
 
-def click(button: str) -> None:
-  run("wlrctl", "pointer", "click", button)
+def click(target: Target, button: str) -> None:
+  run("wlrctl", "pointer", "click", button, target=target)
 
 
-def scroll(dy: int, dx: int) -> None:
-  run("wlrctl", "pointer", "scroll", str(dy), str(dx))
+def scroll(target: Target, dy: int, dx: int) -> None:
+  run("wlrctl", "pointer", "scroll", str(dy), str(dx), target=target)
 
 
 @contextmanager
-def ime_suspended() -> Iterator[None]:
-  """Temporarily deactivate fcitx5 so virtual-keyboard events reach the app verbatim.
+def ime_suspended(target: Target) -> Iterator[None]:
+  """Temporarily deactivate the host's fcitx5 so virtual keystrokes reach the app verbatim.
 
-  An active input method intercepts wtype's keystrokes (e.g. Zhuyin turns "abc" into
-  bopomofo composition), breaking both typing and single-key shortcuts.
+  An active input method intercepts wtype's events (e.g. Zhuyin turns "abc" into bopomofo
+  composition). A realm runs no input method, so only the host needs this.
   """
-  # fcitx5-remote prints 2 when the input method is active; absent fcitx means nothing to do.
-  if shutil.which("fcitx5-remote") is None or run("fcitx5-remote").strip() != b"2":
+  # fcitx5-remote prints 2 when the input method is active.
+  if (
+    target.kind != "host"
+    or shutil.which("fcitx5-remote") is None
+    or run("fcitx5-remote", target=target).strip() != b"2"
+  ):
     yield
     return
-  run("fcitx5-remote", "-c")
+  run("fcitx5-remote", "-c", target=target)
   try:
     yield
   finally:
-    run("fcitx5-remote", "-o")
+    run("fcitx5-remote", "-o", target=target)
 
 
-def wtype(*args: str) -> None:
-  with ime_suspended():
-    run("wtype", *args)
+def wtype(target: Target, *args: str) -> None:
+  with ime_suspended(target):
+    run("wtype", *args, target=target)

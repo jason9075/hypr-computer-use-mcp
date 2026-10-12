@@ -16,7 +16,7 @@
         # so the host's hyprctl on PATH is used instead.
         runtimeTools = [ pkgs.grim pkgs.wtype pkgs.wlrctl ];
 
-        pythonDeps = ps: [ ps.mcp ps.evdev ];
+        pythonDeps = ps: [ ps.mcp ps.pywayland ];
 
         app = python.pkgs.buildPythonApplication {
           pname = "hypr-computer-use-mcp";
@@ -44,7 +44,14 @@
             (python.withPackages (ps: pythonDeps ps ++ [ ps.pytest ]))
             pkgs.ruff
             pkgs.just
+            # pywayland's scanner shells out to pkg-config even when given explicit XML paths.
+            pkgs.pkg-config
           ];
+          env = {
+            WAYLAND_XML = "${pkgs.wayland-scanner}/share/wayland/wayland.xml";
+            WLR_VIRTUAL_POINTER_XML =
+              "${pkgs.wlr-protocols}/share/wlr-protocols/unstable/wlr-virtual-pointer-unstable-v1.xml";
+          };
           shellHook = ''
             export PYTHONPATH="$PWD/src''${PYTHONPATH:+:$PYTHONPATH}"
           '';

@@ -29,19 +29,19 @@ build:
 
 check: lint test build
 
-# Register the PATH-installed server with Claude Code and Codex.
-install: (register bin)
+# Manage the agent realm (nested Hyprland on a headless monitor): up | down | status.
+realm action="status":
+  python -m hypr_computer_use.server realm {{action}}
 
-# Register this checkout via `nix run` (before the package is installed system-wide).
-install-dev: build (register 'nix run ' + quote(root))
-
-# (Re-)register `cmd` with both agents; removing first keeps this idempotent.
-register cmd:
-  -claude mcp remove --scope user {{name}} 2>/dev/null
-  claude mcp add --scope user {{name}} -- {{cmd}}
-  -codex mcp remove {{name}} 2>/dev/null
-  codex mcp add {{name}} -- {{cmd}}
-
-uninstall:
-  -claude mcp remove --scope user {{name}}
-  -codex mcp remove {{name}}
+# Regenerate the vendored wlr-virtual-pointer bindings (paths come from the dev shell).
+protocols:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  out=src/hypr_computer_use/protocols
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  python -m pywayland.scanner -i "$WAYLAND_XML" "$WLR_VIRTUAL_POINTER_XML" -o "$tmp" 2>/dev/null
+  rm -rf "$out"/wlr_virtual_pointer_unstable_v1*
+  # Use pywayland's own core protocol rather than a second generated copy.
+  sed 's/^from \.wayland import/from pywayland.protocol.wayland import/' \
+    "$tmp/wlr_virtual_pointer_unstable_v1.py" > "$out/wlr_virtual_pointer_unstable_v1.py"
