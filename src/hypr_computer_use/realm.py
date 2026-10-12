@@ -67,6 +67,19 @@ def state_dir(runtime: str) -> Path:
   return Path(runtime, "hypr-cu")
 
 
+def activity_path(runtime: str) -> Path:
+  """File whose mtime is the agent's last tool call, for status bars to watch."""
+  return state_dir(runtime) / "activity"
+
+
+def mark_activity(runtime: str) -> None:
+  """Record that the agent just acted on the realm."""
+  try:
+    activity_path(runtime).touch()
+  except OSError as exc:
+    log.debug("cannot mark activity: %s", exc)
+
+
 def read_state(runtime: str) -> RealmState | None:
   """The recorded realm, or None if never started or the record is unreadable."""
   try:
@@ -268,3 +281,4 @@ def down(host: Target) -> None:
     hypr.run("hyprctl", "output", "remove", REALM_MONITOR, target=host)
     hypr.move_cursor(host, x, y)
   (state_dir(runtime) / "realm.json").unlink(missing_ok=True)
+  activity_path(runtime).unlink(missing_ok=True)

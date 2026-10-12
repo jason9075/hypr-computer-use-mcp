@@ -76,7 +76,30 @@ robot 圖示 󰚩。
 "workspace 1 silent, match:class ^(aquamarine)$"
 ```
 
-## 5. 不再需要 uinput
+## 5. Robot icon 顯示 agent 狀態
+
+ws1 的 robot icon 會依 realm 狀態變色：
+
+| 狀態 | 判斷方式 | 顏色 |
+|---|---|---|
+| 沒有 realm | 沒有 `realm.json`，或記錄的 compositor PID 已經不在 | 一般 |
+| realm 閒置 | realm 活著，但 20 秒內沒有 tool call | 黃色 |
+| **agent 正在操作** | 20 秒內有 tool call | **綠色並閃爍** |
+
+運作方式：
+
+- **server**：每次 tool call 解析 realm target 時，touch `$XDG_RUNTIME_DIR/hypr-cu/activity`；
+  `realm down` 時刪除。
+- **ags**：每 0.5 秒用 Gio 讀 `realm.json`、確認 PID 是否還活著，再看 `activity` 的修改時間，把結果
+  變成 ws1 按鈕的 CSS class（`realm-idle`、`realm-active`）。tooltip 也會顯示目前狀態。
+
+門檻設成 20 秒，是因為 agent 兩次 tool call 之間常有思考時間；門檻太短，icon 會在一個任務進行中
+不斷閃爍。
+
+開發時發現 ags 原本的程式碼假設 `focusedWorkspace` 永遠不是 null。但移除 AGENT 螢幕的瞬間它會是
+null，結果拋出錯誤，workspace 按鈕的狀態就卡住不動了。現在已經加上 null 檢查。
+
+## 6. 不再需要 uinput
 
 早期版本的 drag 用 `/dev/uinput`，需要把使用者加進 `uinput` group。改用 wlr-virtual-pointer 之後
 就不需要了，這個設定已經移除。

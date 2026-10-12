@@ -105,3 +105,12 @@ realm 不健康時（沒啟動、視窗被關掉、AGENT 螢幕不見了），to
 | 操作 | `click`、`scroll`、`mouse_move`、`drag`、`type_text`、`key`、`focus_window` |
 
 只讀的 tools 有標 `readOnlyHint`，讓 MCP host 可以依此決定權限策略。
+
+## 狀態檔
+
+| 路徑（`$XDG_RUNTIME_DIR/hypr-cu/`） | 內容 | 用途 |
+|---|---|---|
+| `realm.json` | realm 的 signature、display、PID | server 定位 realm；status bar 判斷 realm 是否在跑 |
+| `activity` | 空檔案，mtime 是最後一次 tool call 的時間 | status bar 判斷 agent 是否正在操作 |
+| `realm.conf` | nested Hyprland 的 config | 由 `realm up` 生成 |
+| `realm.log` | nested Hyprland 的輸出 | 除錯用 |

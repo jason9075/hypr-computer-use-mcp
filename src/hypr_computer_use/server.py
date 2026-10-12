@@ -74,6 +74,7 @@ def _target() -> Target:
   if why is not None:
     raise TargetError(f"{why}; call start_realm first")
   assert state is not None
+  realm.mark_activity(host.runtime_dir)
   return realm.as_target(state, host.runtime_dir)
 
 
