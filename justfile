@@ -33,15 +33,6 @@ check: lint test build
 realm action="status":
   python -m hypr_computer_use.server realm {{action}}
 
-# Regenerate the vendored wlr-virtual-pointer bindings (paths come from the dev shell).
+# Regenerate the pywayland protocol bindings (the dev shell does this on first entry).
 protocols:
-  #!/usr/bin/env bash
-  set -euo pipefail
-  out=src/hypr_computer_use/protocols
-  tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
-  python -m pywayland.scanner -i "$WAYLAND_XML" "$WLR_VIRTUAL_POINTER_XML" -o "$tmp" 2>/dev/null
-  rm -rf "$out"/wlr_virtual_pointer_unstable_v1*
-  # Use pywayland's own core protocol rather than a second generated copy.
-  sed 's/^from \.wayland import/from pywayland.protocol.wayland import/' \
-    "$tmp/wlr_virtual_pointer_unstable_v1.py" > "$out/wlr_virtual_pointer_unstable_v1.py"
+  "$HYPR_CU_GEN_PROTOCOLS" src/hypr_computer_use/protocols

@@ -6,3 +6,6 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 .env
+# Generated at build time by the matching pywayland (see flake.nix genProtocols).
+src/hypr_computer_use/protocols/*
+!src/hypr_computer_use/protocols/__init__.py

@@ -14,6 +14,8 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/hypr_computer_use"]
+# Generated at build time and git-ignored, which hatch would otherwise exclude.
+artifacts = ["src/hypr_computer_use/protocols/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
