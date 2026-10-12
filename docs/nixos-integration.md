@@ -1,10 +1,11 @@
-# NixOS 整合
+# NixOS integration
 
-以下以 [jason9075/nixos-config](https://github.com/jason9075/nixos-config) 的 `taipei` 機器為例。
+The examples follow the `taipei` machine in
+[jason9075/nixos-config](https://github.com/jason9075/nixos-config).
 
-## 1. 安裝 package
+## 1. Installing the package
 
-`flake.nix`：
+`flake.nix`:
 
 ```nix
 hypr-computer-use-mcp = {
@@ -14,46 +15,50 @@ hypr-computer-use-mcp = {
 };
 ```
 
-Home Manager：
+Home Manager:
 
 ```nix
 home.packages = [ inputs.hypr-computer-use-mcp.packages.x86_64-linux.default ];
 ```
 
-Package 會把 `grim`、`wtype`、`wlrctl` 加進 PATH。`hyprctl` 和 `Hyprland` 則刻意**不打包**，而是用
-系統上的版本，因為它們必須跟正在跑的 compositor 一致。
+The package puts `grim`, `wtype` and `wlrctl` on its PATH. `hyprctl` and `Hyprland` are deliberately
+**not** bundled: the host's own versions are used, since they must match the running compositor.
 
-使用 `follows` 時，package 會改用你的 nixpkgs 來 build，包括 pywayland。protocol bindings 是在 build
-時用同一個 pywayland 生成的，所以不同版本都能正常運作（已驗證 pywayland 0.4.18 和 0.4.19）。
+With `follows`, the package is built against your nixpkgs, pywayland included. The protocol bindings are
+generated at build time by that same pywayland, so any version works (verified with pywayland 0.4.18 and
+0.4.19).
 
-## 2. 註冊到 Claude Code 和 Codex
+## 2. Registering with Claude Code and Codex
 
-兩者的設定檔都是 mutable 的（Codex 會自己寫入 trust 設定），不適合交給 Home Manager 管理，所以用
-指令註冊，並指向 PATH 上的 binary 名稱：
+Both keep mutable config files (Codex writes its own trust settings), which don't suit Home Manager, so
+registration is done by command and points at the binary name on PATH:
 
 ```sh
 cd ~/projects/hypr-computer-use-mcp
-just install      # claude mcp add + codex mcp add，都指向 hypr-computer-use-mcp
+just install      # claude mcp add + codex mcp add, both pointing at hypr-computer-use-mcp
 ```
 
-之後只要 `nix flake update hypr-computer-use-mcp` 再 `nh home switch` 就能升級，不需要重新註冊。
+Upgrading is then just `nix flake update hypr-computer-use-mcp` followed by `nh home switch`; no
+re-registration needed.
 
-## 3. 看 nest
+## 3. Watching the nest
 
-nest 在 ws1，是一個普通的 workspace，`super+1` 就能切過去看，按 `super+2`～`0` 回來。
+The nest lives on ws1, an ordinary workspace: `super+1` to look, `super+2`…`0` to go back.
 
-不需要任何 Hyprland 設定。nest 啟動時，用 exec rule 把視窗放進 ws1（`workspace 1 silent`），並開啟
-`render_unfocused`，讓它在隱藏時持續以 15 FPS 更新。
+No Hyprland configuration is needed. When the nest starts, its window is placed on ws1 by an exec rule
+(`workspace 1 silent`) together with `render_unfocused`, which keeps it updating at 15 FPS while hidden.
 
-> 早期版本需要一台 headless 螢幕 `AGENT`、對應的 monitor rule，以及特製的 `nest_ws.sh` 來處理
-> `super+1`。這些都因為效能問題而拿掉了，見 [nest.md](nest.md#為什麼不用-headless-螢幕舊設計)。
+> Early versions needed a headless monitor `AGENT`, a matching monitor rule and a custom
+> workspace-switch script for `super+1`. All of that was removed for performance reasons; see
+> [nest.md](nest.md#why-not-a-headless-monitor-earlier-design).
 
-## 4. 自訂 nest：桌布和 dock
+## 4. Customising the nest: wallpaper and dock
 
-nest 啟動時，如果 `$XDG_CONFIG_HOME/hypr-cu/nest.conf` 存在，會用 `source` 把它載入 nested Hyprland 的
-config。檔案不存在時就不加 `source`，因為 Hyprland 會把找不到的 `source` 當成 config 錯誤。
+If `$XDG_CONFIG_HOME/hypr-cu/nest.conf` exists, `nest up` `source`s it from the nested Hyprland config.
+The `source` line is only added when the file exists, because Hyprland reports a missing `source` as a
+config error.
 
-taipei 用一個 Home Manager 模組（`home/gui/agent-nest.nix`）產生這個檔案：
+taipei generates the file from a Home Manager module (`home/gui/agent-nest.nix`):
 
 ```nix
 xdg.configFile."hypr-cu/nest.conf".text = ''
@@ -62,59 +67,62 @@ xdg.configFile."hypr-cu/nest.conf".text = ''
 '';
 ```
 
-- **桌布**：nested Hyprland 預設是全黑的背景，所以在 nest 裡跑 `swaybg` 顯示 agent 專用桌布，上面印著
-  操作提示。
-- **dock**：nest 底部用 `waybar` 放一條小 dock：
+- **Wallpaper**: a nested Hyprland has a plain black background, so `swaybg` shows an agent-specific
+  wallpaper with usage hints printed on it.
+- **Dock**: a small `waybar` dock at the bottom of the nest:
 
-  | 按鈕 | 指令 | 為什麼這樣寫 |
+  | Button | Command | Why |
   |---|---|---|
-  | 󰈹 Firefox | `firefox --profile <nest profile> --new-window` | 跟 agent 的 `open_url` 共用 profile 和 instance，不會跑到 host |
-  | 󰆍 kitty | `kitty` | kitty 不是單一 instance，直接開就在 nest |
-  | 󰉋 Thunar | `dbus-run-session -- thunar` | Thunar 透過 D-Bus 做單一 instance，用獨立的 bus 才不會跑到 host |
-  | 󰀻 開程式 | `rofi -show drun` | |
-  | 󰅖 關閉 | `hyprctl dispatch killactive` | nest 裡沒有 `super+q`（在 host 上它關的是整個 nest） |
+  | 󰈹 Firefox | `firefox --profile <nest profile> --new-window` | Shares the profile and instance with the agent's `open_url`; never reaches the host |
+  | 󰆍 kitty | `kitty` | kitty isn't single-instance, so it opens in the nest as is |
+  | 󰉋 Thunar | `dbus-run-session -- thunar` | Thunar is a D-Bus single instance; a private bus keeps it out of the host's Thunar |
+  | 󰀻 Launcher | `rofi -show drun` | |
+  | 󰅖 Close | `hyprctl dispatch killactive` | There is no `super+q` inside the nest (on the host it closes the whole nest) |
 
-  一開始用的是快捷鍵（`alt+f`），後來改成 dock：host 的快捷鍵佔用了 SUPER 而且優先於 nest，點擊式的
-  控制比較直觀。
-- **注意**：從 rofi 開的單一 instance 程式，如果 host 上已經開著同一個（例如 Firefox、Discord），視窗會開在
-  host。上面 dock 的按鈕就是為了避開這個問題，詳見
-  [lessons-learned](lessons-learned.md#19-從-nest-開的程式跑到-host)。
-- **關閉程式**：用 dock 的 󰅖，或程式自己的 ✕ / `ctrl+q`。在 ws1 按 `super+q` 關的是整個 nest 的外層
-  視窗，裡面的程式會留在背景，要用 `nest down` 才會完整清掉。
+  The first attempt used a keybind (`alt+f`). It was replaced by the dock because host binds own SUPER and
+  take precedence over the nest, and clickable controls are easier to discover.
+- **Caveat**: a single-instance app launched from rofi opens on the host if the host already runs one
+  (Firefox, Discord, ...). The dock buttons above exist to avoid exactly that; see
+  [lessons-learned](lessons-learned.md#19-apps-launched-in-the-nest-opened-on-the-host).
+- **Closing apps**: use the dock's 󰅖, or the app's own ✕ / `ctrl+q`. Pressing `super+q` on ws1 closes the
+  nest's outer window; the apps inside keep running in the background until `nest down`.
 
-## 5. Robot icon 顯示 agent 狀態
+## 5. Status icon
 
-ws1 的 icon 換成 robot 圖示 󰚩，並依 nest 狀態變色：
+The ws1 icon is a robot 󰚩 that changes colour with the nest's state:
 
-| 狀態 | 判斷方式 | 顏色 |
+| State | Condition | Colour |
 |---|---|---|
-| 沒有 nest | 沒有 `nest.json`，或記錄的 compositor PID 已經不在 | 一般 |
-| nest 閒置 | nest 活著，但 20 秒內沒有 tool call | 黃色 |
-| **agent 正在操作** | 20 秒內有 tool call | **綠色並閃爍** |
+| No nest | No `nest.json`, or its compositor PID is gone | Default |
+| Nest idle | Nest alive, no tool call in the last 20 s | Yellow |
+| **Agent acting** | A tool call within the last 20 s | **Pulsing green** |
 
-運作方式：
+How it works:
 
-- **server**：每次 tool call 解析 nest target 時，touch `$XDG_RUNTIME_DIR/hypr-cu/activity`；
-  `nest down` 時刪除。
-- **ags**：每 0.5 秒用 Gio 讀 `nest.json`、確認 PID 是否還活著，再看 `activity` 的修改時間，把結果
-  變成 ws1 按鈕的 CSS class（`nest-idle`、`nest-active`）。tooltip 也會顯示目前狀態。
+- **Server**: every tool call that resolves the nest touches `$XDG_RUNTIME_DIR/hypr-cu/activity`;
+  `nest down` deletes it.
+- **AGS**: every 0.5 s it reads `nest.json` with Gio, checks the PID is alive, compares the mtime of
+  `activity`, and turns the result into CSS classes on the ws1 button (`nest-idle`, `nest-active`). The
+  tooltip shows the state too.
 
-門檻設成 20 秒，是因為 agent 兩次 tool call 之間常有思考時間；門檻太短，icon 會在一個任務進行中
-不斷閃爍。
+The 20-second window exists because agents think between tool calls; a shorter one would make the icon
+flicker mid-task.
 
-開發時發現 ags 原本的程式碼假設 `focusedWorkspace` 永遠不是 null，但移除螢幕的瞬間它會是 null，
-結果拋出錯誤，workspace 按鈕的狀態就卡住不動了。現在已經加上 null 檢查。
+During development it turned out the AGS code assumed `focusedWorkspace` is never null. It is null for a
+moment while a monitor is removed, and the resulting exception froze the workspace buttons' state. A null
+check now guards it.
 
-## 6. 不需要 uinput
+## 6. No uinput needed
 
-早期版本的 drag 用 `/dev/uinput`，需要把使用者加進 `uinput` group。改用 wlr-virtual-pointer 之後
-就不需要了。
+Early versions implemented drag with `/dev/uinput`, which required adding the user to the `uinput` group.
+Since switching to wlr-virtual-pointer that is no longer needed.
 
-## 故障排除
+## Troubleshooting
 
-### Bar 不見了
+### The status bar disappeared
 
-nest 的環境變數殘留在 systemd user environment 裡。新版會自動還原；如果還是發生：
+The nest's variables were left in the systemd user environment. Current versions restore it
+automatically; if it happens anyway:
 
 ```sh
 systemctl --user set-environment WAYLAND_DISPLAY=wayland-1 \
@@ -122,15 +130,16 @@ systemctl --user set-environment WAYLAND_DISPLAY=wayland-1 \
 systemctl --user reset-failed ags && systemctl --user restart ags
 ```
 
-### nest 卡住、Firefox 開不出來，或狀態不明
+### The nest is stuck, Firefox won't open, or its state is unclear
 
 ```sh
-hypr-computer-use-mcp nest status    # 健康時 exit 0；有問題時 exit 1 並印出原因
-hypr-computer-use-mcp nest down      # 完整清理：nest 裡的程式、compositor、helper、環境變數
-hypr-computer-use-mcp nest up        # 重建
+hypr-computer-use-mcp nest status    # exit 0 when healthy; otherwise exit 1 with the reason
+hypr-computer-use-mcp nest down      # full cleanup: apps inside, compositor, helpers, environment
+hypr-computer-use-mcp nest up        # start again
 ```
 
-### htop 裡的 `Hyprland --watchdog-fd` 很吃 CPU
+### `Hyprland --watchdog-fd` uses lots of CPU in htop
 
-那是 host compositor 本體，不是 watchdog（`start-hyprland` 才是 watchdog）。nest 隱藏時 host 應該只有
-幾個百分點；如果很高，先確認是不是在跑舊版（有 `AGENT` 螢幕的那一版）。
+That is the host compositor itself, not the watchdog (`start-hyprland` is the watchdog). With a hidden
+nest the host should sit at a few percent; if it is much higher, check you aren't running an old version
+that still used the `AGENT` headless monitor.

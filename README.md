@@ -3,7 +3,7 @@
 MCP server that lets an agent (Claude Code, Codex, …) use a computer on Hyprland — without
 fighting you for the mouse and keyboard.
 
-> 📖 Detailed design notes (Traditional Chinese): [docs/](docs/README.md)
+> 📖 Detailed design notes: [docs/](docs/README.md)
 
 ## How it works: the nest
 

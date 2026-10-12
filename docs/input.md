@@ -1,95 +1,108 @@
-# 截圖與輸入
+# Screenshots and input
 
-## 座標系統
+## Coordinates
 
-模型看到的是縮小過的截圖，所以每個 x/y 參數都是「**最近一次截圖**裡的像素座標」。server 負責換算成
-Hyprland 的全域 logical 座標。
+The model sees a downscaled screenshot, so every x/y argument is **a pixel in the most recent
+screenshot**. The server maps it to Hyprland's global logical coordinates:
 
 ```
-截圖像素 ──(÷ factor)──> 螢幕內 logical 座標 ──(+ 螢幕位置)──> 全域 logical 座標
+screenshot px ──(÷ factor)──> monitor-local logical ──(+ monitor position)──> global logical
 ```
 
-`geometry.py` 的 `Viewport` 記錄了換算需要的所有資訊：
+`Viewport` in `geometry.py` holds everything the mapping needs:
 
 ```python
 @dataclass(frozen=True)
 class Viewport:
   monitor: str
-  origin_x: int     # 螢幕在全域 layout 的位置
+  origin_x: int     # monitor position in the global layout
   origin_y: int
-  logical_w: int    # logical 尺寸（已除以 scale、已處理旋轉）
+  logical_w: int    # logical size (scale divided out, rotation applied)
   logical_h: int
-  factor: float     # 每個 logical 像素對應幾個截圖像素
+  factor: float     # screenshot pixels per logical pixel
 ```
 
-- **縮圖**：`factor = min(1, MAX_EDGE / 長邊)`，預設長邊不超過 1280px。高解析度截圖很耗 token，
-  而且模型的座標準確度也會下降。
-- **HiDPI**：先除以 monitor 的 `scale` 得到 logical 尺寸。
-- **旋轉**：`transform` 是奇數（90° / 270°）時，寬高要對調。
-- **邊界檢查**：超出截圖範圍的座標會直接回錯誤，不會點到奇怪的地方。
+- **Downscaling**: `factor = min(1, MAX_EDGE / long edge)`, with the long edge capped at 1280px by
+  default. High-resolution screenshots cost many tokens and make the model's coordinates less accurate.
+- **HiDPI**: sizes are divided by the monitor's `scale` first.
+- **Rotation**: for odd `transform` values (90° / 270°) width and height swap.
+- **Bounds checking**: coordinates outside the screenshot return an error rather than clicking somewhere
+  unexpected.
 
-截圖用 `grim -o <monitor> -s <factor>`。`grim` 的 `-s` 是相對於 logical 尺寸的比例，所以截出來的圖
-剛好就是 `Viewport.image_size`，不需要再用 Pillow 縮放。
+Screenshots use `grim -o <monitor> -s <factor>`. `grim`'s `-s` scales relative to the logical size, so
+the image comes out at exactly `Viewport.image_size` with no Pillow resize needed.
 
-每個 session（host 或 nest）各自記住最後一張截圖的 `Viewport`，避免兩邊的座標混在一起。
+Each session (host or nest) remembers the `Viewport` of its own last screenshot, so coordinates from one
+never leak into the other.
 
-## 點擊與捲動：`wlrctl`
+## Pointer: warp, then real motion
 
 ```
-hyprctl dispatch movecursor X Y    # 移到全域 logical 座標
-wlrctl pointer click left          # 透過 wlr-virtual-pointer 點擊
-wlrctl pointer scroll DY DX        # 一格滾輪 = 15 個 axis 單位
+hyprctl dispatch movecursor X Y    # warp to global logical coordinates
+virtual pointer: motion(+1, 0), motion(-1, 0)
+wlrctl pointer click left          # click via wlr-virtual-pointer
+wlrctl pointer scroll DY DX        # one wheel notch = 15 axis units
 ```
 
-`wlrctl` 走 Wayland 的 virtual-pointer 協定，**不需要 root、uinput 或常駐 daemon**，這是選它而不是
-`ydotool` 的原因。
+`movecursor` only **warps**: it sends no motion events, so clients keep a stale pointer position. Hover
+states don't update, and GTK resolves a following click against the last widget the pointer entered
+(waybar dock buttons after the first click did nothing). Every warp is therefore followed by a net-zero
+relative motion over wlr-virtual-pointer.
 
-## 鍵盤：`wtype`
+`wlrctl` speaks Wayland's virtual-pointer protocol and **needs no root, uinput or daemon**, which is why it
+was chosen over `ydotool`.
 
-- `type_text`：`wtype -- "text"`，支援 Unicode（`→`、`🎯`、中文都可以）。
-- `key`：`keys.py` 把 `"ctrl+shift+t"` 轉成 `wtype -M ctrl -M shift t -m shift -m ctrl`。
-  - 單一字元走 wtype 的文字路徑，標點符號的 keysym 交給 wtype 處理。
-  - `-` 會被當成選項，所以改用 keysym `minus`；`ctrl++` 代表 ctrl 加上 plus 鍵。
-  - 常見別名：`enter`、`esc`、`backspace`、`pageup`、`f1`…`f24`、`super`／`win`／`cmd`（都對應到 `logo`）。
+## Keyboard: `wtype`
 
-### fcitx5 會吃掉按鍵（只影響 host 模式）
+- `type_text`: `wtype -- "text"`, Unicode included (`→`, `🎯`, CJK).
+- `key`: `keys.py` turns `"ctrl+shift+t"` into `wtype -M ctrl -M shift t -m shift -m ctrl`.
+  - Single characters go through wtype's text path, which resolves punctuation keysyms itself.
+  - `-` would be parsed as an option, so it is sent as the keysym `minus`; `ctrl++` means ctrl plus the
+    plus key.
+  - Common aliases: `enter`, `esc`, `backspace`, `pageup`, `f1`…`f24`, and `super` / `win` / `cmd` (all
+    mapped to `logo`).
 
-`wtype` 送出的按鍵會經過 input method。fcitx5 注音開著時，打 `https://...` 會變成「ㄏㄩㄥ」。所以在
-host 模式下，打字前先用 `fcitx5-remote -c` 暫時關掉 IME，結束後如果原本是開著的，就用
-`fcitx5-remote -o` 再打開。nest 裡沒有跑 input method，所以不需要這麼做。
+### fcitx5 swallows keystrokes (host mode only)
 
-### 限制：Hyprland keybind 不吃 virtual keyboard
+Keystrokes from `wtype` pass through the input method. With fcitx5's Zhuyin active, typing `https://...`
+produced "ㄏㄩㄥ". In host mode the server therefore deactivates the IME with `fcitx5-remote -c` before
+typing and, if it was active, restores it with `fcitx5-remote -o` afterwards. The nest runs no input
+method, so it doesn't need this.
 
-`wtype` 送出 `super+m` 時，Hyprland 不會觸發對應的 keybind。agent 要切換視窗，應該用
-`focus_window` 這類 IPC tool，不要依賴 WM 快捷鍵。
+### Limitation: Hyprland keybinds ignore the virtual keyboard
 
-## 拖曳：wlr-virtual-pointer + pywayland
+When `wtype` sends `super+m`, Hyprland doesn't trigger the bound action. To switch windows the agent
+should use IPC tools such as `focus_window`, not WM shortcuts.
 
-拖曳需要「按住 → 移動 → 放開」，而 `wlrctl` 只有一次完成的 click。這部分的演進：
+## Drag: wlr-virtual-pointer + pywayland
 
-| 嘗試 | 結果 |
+A drag needs press → move → release, and `wlrctl` only offers an atomic click. How this evolved:
+
+| Attempt | Result |
 |---|---|
-| evdev `/dev/uinput` | ❌ uinput 是 kernel 層的裝置，事件只會進 **host** 的 seat，到不了 nest；而且還需要額外的 group 權限 |
-| virtual pointer + `motion_absolute` | ❌ 只在起點留下一個點，後面的移動都沒有被當成拖曳 |
-| virtual pointer + 相對 `motion` | ✅ tldraw 的矩形、箭頭、畫筆線條、GIMP 的筆刷都正確 |
+| evdev `/dev/uinput` | ❌ uinput is a kernel device: its events only reach the **host** seat, never the nest; it also needs extra group permissions |
+| Virtual pointer + `motion_absolute` | ❌ left a single dot at the start; the movement wasn't treated as a drag |
+| Virtual pointer + relative `motion` | ✅ tldraw rectangles, arrows, pen strokes and GIMP brush strokes all correct |
 
-### 為什麼絕對移動不行
+### Why absolute motion fails
 
-實測：沒有按住按鍵時，`motion_absolute` 能正確移動游標。但按住按鍵後，app 收不到移動事件。推測是
-Hyprland 把 virtual pointer 的絕對移動當成 warp 處理，而 warp 不會產生 client 端的拖曳事件。改成相對
-移動之後，游標位置完全精準，app 也確實收到了拖曳。
+Without a button held, `motion_absolute` moves the cursor correctly. With a button held, apps receive no
+movement. Hyprland appears to treat absolute virtual-pointer motion as a warp, and warps produce no
+client-side drag events. With relative motion the cursor lands exactly and apps see a real drag.
 
-### 實作（`vpointer.py`）
+### Implementation (`vpointer.py`)
 
 ```
-1. hyprctl movecursor 到起點          ← 絕對定位（沒按住，所以沒問題）
-2. button(BTN_LEFT, pressed)
-3. 沿路徑送相對 motion(dx, dy)，每步間隔 15ms
-4. 讀取實際游標位置，有偏差就補一個修正量  ← 防止 pointer acceleration 造成的誤差
-5. button(BTN_LEFT, released)         ← 放在 finally，保證一定會放開
+1. hyprctl movecursor to the start      ← absolute positioning (no button held, so fine)
+2. motion(+1, 0), motion(-1, 0)         ← let the client see the warp before the press
+3. button(BTN_LEFT, pressed)
+4. relative motion(dx, dy) along the path, 15 ms per step
+5. read the real cursor and correct any drift  ← guards against pointer acceleration
+6. button(BTN_LEFT, released)           ← in a finally block, so it is always released
 ```
 
-連線用 socket 的**絕對路徑**（`$XDG_RUNTIME_DIR/wayland-2`），不依賴 server process 自己的環境變數。
+The connection uses the socket's **absolute path** (`$XDG_RUNTIME_DIR/wayland-2`), independent of the
+server process's own environment.
 
-收尾的順序很重要：先 destroy pointer 和 manager，做一次 roundtrip，再 disconnect。順序錯了，pywayland
-會在回收 proxy 時 segfault。
+Teardown order matters: destroy the pointer and the manager, roundtrip, then disconnect. In any other
+order pywayland segfaults while collecting the proxies.

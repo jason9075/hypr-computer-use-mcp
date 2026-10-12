@@ -1,180 +1,205 @@
-# 踩坑紀錄
+# Lessons learned
 
-開發過程中遇到的問題，依照發現的先後順序排列。每一項都寫了現象、根因和解法，大部分都是實際測試時
-才發現的。
+Problems hit during development, in the order they were found. Each lists the symptom, root cause and
+fix; most only surfaced through hands-on testing.
 
-## 1. MCP host 會剝掉環境變數
+## 1. MCP hosts strip the environment
 
-- **現象**：用 MCP SDK 的 stdio client 測試時，所有 `hyprctl` 呼叫都失敗，而且 stderr 是空的。
-- **根因**：stdio client 預設只傳少數幾個環境變數，`HYPRLAND_INSTANCE_SIGNATURE` 和
-  `WAYLAND_DISPLAY` 都不見了。另外，`hyprctl` 會把錯誤寫到 **stdout**，有時 exit code 還是 0。
-- **解法**：從 `$XDG_RUNTIME_DIR/hypr/*/hyprland.lock` 找回 session；錯誤訊息改成在 stderr 為空時
-  讀 stdout；dispatcher 的回應必須是 `ok` 才算成功。
+- **Symptom**: testing with the MCP SDK's stdio client, every `hyprctl` call failed with an empty stderr.
+- **Root cause**: the stdio client passes only a handful of variables by default, dropping
+  `HYPRLAND_INSTANCE_SIGNATURE` and `WAYLAND_DISPLAY`. On top of that, `hyprctl` writes errors to
+  **stdout**, sometimes still exiting 0.
+- **Fix**: recover sessions from `$XDG_RUNTIME_DIR/hypr/*/hyprland.lock`; read stdout when stderr is
+  empty; treat a dispatcher as successful only when it replies `ok`.
 
-## 2. fcitx5 把網址打成注音
+## 2. fcitx5 turned URLs into Zhuyin
 
-- **現象**：agent 在網址列打 `https://www.tldraw.com/`，畫面上出現「ㄏㄩㄥ」。
-- **根因**：`wtype` 送出的按鍵會經過 input method。
-- **解法**：host 模式下，打字前用 `fcitx5-remote -c` 暫時關掉 IME，結束後還原原本的狀態。
+- **Symptom**: the agent typed `https://www.tldraw.com/` into the address bar and "ㄏㄩㄥ" appeared.
+- **Root cause**: keystrokes from `wtype` pass through the input method.
+- **Fix**: in host mode, deactivate the IME with `fcitx5-remote -c` before typing and restore its previous
+  state afterwards.
 
-## 3. 隱藏 workspace 上的 nested Hyprland 不會 render
+## 3. A nested Hyprland on a hidden workspace stops rendering
 
-- **現象**：nest 放在隱藏的 workspace，`grim` 截圖直接卡死。
-- **根因**：host 不會送 frame callback 給看不見的視窗，nested compositor 就不會畫新的 frame，
-  screencopy 永遠等不到。
-- **第一個解法**：開一台 headless 螢幕 `AGENT`，讓 nest 的 workspace 成為它的 active workspace。
-  能動，但造成 #4、#5 和 #15。
-- **最終解法**：window rule `render_unfocused`，見 #15。
+- **Symptom**: with the nest on a hidden workspace, `grim` hung.
+- **Root cause**: the host sends no frame callbacks to invisible windows, so the nested compositor draws
+  no new frames and screencopy waits forever.
+- **First fix**: a headless monitor `AGENT` with the nest's workspace active on it. It worked, but caused
+  #4, #5 and #15.
+- **Final fix**: the `render_unfocused` window rule; see #15.
 
-## 4. Config reload 把 AGENT 移到你的螢幕旁邊（已因 #15 移除 AGENT）
+## 4. A config reload moved AGENT next to the real monitor (obsolete: AGENT removed in #15)
 
-- **現象**：`nh home switch` 之後，AGENT 從 `-10000x0` 變成 `1920x0`（緊貼實體螢幕），scale 也變成 2。
-- **根因**：`hyprctl keyword monitor` 是 runtime 設定，config reload 時會被清掉。
-- **解法**：把 monitor rule 寫進 Hyprland config；`nest up` 也會每次重新套用。
+- **Symptom**: after `nh home switch`, AGENT moved from `-10000x0` to `1920x0`, right next to the physical
+  monitor, and its scale became 2.
+- **Root cause**: `hyprctl keyword monitor` is runtime state, cleared by a config reload.
+- **Fix**: put the monitor rule in the Hyprland config, and re-apply it on every `nest up`.
 
-## 5. 使用者被困在看不見的螢幕（已因 #15 移除 AGENT）
+## 5. The user got trapped on an invisible monitor (obsolete: AGENT removed in #15)
 
-- **現象**：使用者按了 `super+1`，畫面完全沒反應，鍵盤也沒作用，最後只好登出。
-- **根因**：原本的 `super+1` 是 `workspace 1`，而 ws1 在 AGENT 上，focus 就跑到看不見的螢幕。
-  AGENT 不相鄰，滑鼠也移不過去。
-- **解法**：`nest_ws.sh` 把 ws1 拉到目前的螢幕來顯示。其實按 `super+0` 也能救回來，因為 host 的
-  keybind 優先於 nested，只是畫面沒有任何提示，使用者無從得知。
+- **Symptom**: the user pressed `super+1`; nothing changed on screen, the keyboard seemed dead, and they
+  ended up logging out.
+- **Root cause**: `super+1` was a plain `workspace 1`, and ws1 lived on AGENT, so focus moved to an
+  invisible monitor. AGENT wasn't adjacent to the real monitor, so the mouse couldn't reach it either.
+- **Fix**: a custom workspace-switch script pulled ws1 onto the current monitor instead. `super+0` would
+  in fact have escaped (host binds take precedence over the nest), but nothing on screen said so.
 
-## 6. Vendored bindings 在部署時 import 失敗
+## 6. Vendored bindings failed to import once deployed
 
-- **現象**：本機測試都正常，但用 nixos-config build 出來的版本一啟動就 `ImportError: WlOutputProxy`。
-- **根因**：pywayland scanner 的輸出跟 pywayland 版本綁死。0.4.19 產生單一檔案，0.4.18 產生目錄，
-  匯入的名稱也不同。nixos-config 用 `follows` 換掉 nixpkgs，拿到的是 0.4.18。
-- **解法**：不再 vendor，改成在 Nix build 時用同一個 pywayland 生成，連 core `wayland` 協定也一起生成，
-  讓兩者的 import 一定一致。用兩個 nixpkgs 版本都實際 build 並畫過圖。
-- **附帶的坑**：hatchling 預設會遵守 `.gitignore`，build 時生成的檔案會被排除在 wheel 之外，所以要在
-  `pyproject.toml` 加上 `artifacts`。
+- **Symptom**: everything worked locally, but the build from nixos-config failed at startup with
+  `ImportError: WlOutputProxy`.
+- **Root cause**: pywayland scanner output is tied to the pywayland release: 0.4.19 emits a single module,
+  0.4.18 a package directory, with different exported names. nixos-config overrides nixpkgs via
+  `follows` and got 0.4.18.
+- **Fix**: stop vendoring; generate the bindings at Nix build time with the same pywayland, including the
+  core `wayland` protocol so the two always import each other consistently. Both nixpkgs versions were
+  built and used to draw.
+- **Related pitfall**: hatchling honours `.gitignore` and silently dropped the generated files from the
+  wheel, hence `artifacts` in `pyproject.toml`.
 
-## 7. uinput 的事件到不了 nest
+## 7. uinput events never reach the nest
 
-- **現象**：用 `/dev/uinput` 實作的 drag 在 nest 裡沒有作用。
-- **根因**：uinput 是 kernel 層的輸入裝置，只會被 host compositor 讀取。nested compositor 的輸入只來自
-  host 轉送給它的視窗事件。
-- **解法**：改用 Wayland 的 wlr-virtual-pointer 協定，直接連到 nest 的 socket。
+- **Symptom**: a drag implemented with `/dev/uinput` did nothing in the nest.
+- **Root cause**: uinput is a kernel input device read only by the host compositor. A nested compositor
+  only receives input that the host forwards to its window.
+- **Fix**: use Wayland's wlr-virtual-pointer protocol, connected directly to the nest's socket.
 
-## 8. 按住時的絕對移動不算拖曳
+## 8. Absolute motion while a button is held is not a drag
 
-- **現象**：用 `motion_absolute` 拖曳，tldraw 只在起點留下一個點。
-- **根因**：Hyprland 似乎把 virtual pointer 的絕對移動當成 warp，app 收不到拖曳事件。沒按住時，絕對
-  移動是正常的。
-- **解法**：起點用絕對定位，按住之後改送相對 `motion`，最後再對照實際游標位置修正。
+- **Symptom**: dragging with `motion_absolute`, tldraw left a single dot at the start.
+- **Root cause**: Hyprland appears to treat absolute virtual-pointer motion as a warp, which produces no
+  drag events in clients. Without a button held, absolute motion works fine.
+- **Fix**: position the start absolutely, send relative `motion` once the button is down, and correct
+  against the real cursor at the end.
 
-## 9. pywayland 收尾時 segfault
+## 9. pywayland segfaults on teardown
 
-- **現象**：腳本結束時 exit code 139。
-- **根因**：proxy 的生命週期比 display 連線還長，被 GC 回收時就 crash。
-- **解法**：依序 destroy pointer 和 manager、roundtrip、disconnect。照這個順序做，連續三輪都乾淨結束，
-  所以 drag 可以直接在 server process 裡跑，不需要另開 subprocess。
+- **Symptom**: the script exited with code 139.
+- **Root cause**: proxies outlived the display connection and crashed when garbage-collected.
+- **Fix**: destroy the pointer and the manager, roundtrip, then disconnect. In that order three
+  consecutive cycles ended cleanly, so drags run inside the server process without a subprocess.
 
-## 10. Bar 不見了
+## 10. The status bar disappeared
 
-- **現象**：使用者的 AGS bar 消失，ags service 連續重啟失敗，錯誤是 `Failed to open display`。
-- **根因**：nested Hyprland 啟動時把 `WAYLAND_DISPLAY=wayland-2` 寫進 systemd/dbus 的 user
-  environment。ags 剛好在那時重啟，就連進了 nest；nest 關掉後，ags 一直去連已經不存在的 socket。
-- **解法**：`nest up` 後和 `nest down` 後都主動還原。`down` 一定要在 compositor 停止**之後**做，因為
-  nested 結束時會再改一次：刪掉 signature，但留下自己的 `WAYLAND_DISPLAY`。
-- **沒用的嘗試**：Hyprland 0.54 不支援 `HYPRLAND_NO_SD_VARS`。
-- **驗證方式**：nest 開著時重啟 ags，確認 bar 出現在 host 而不是 nest。
+- **Symptom**: the user's AGS bar vanished; the service crash-looped with `Failed to open display`.
+- **Root cause**: on startup the nested Hyprland wrote `WAYLAND_DISPLAY=wayland-2` into the systemd/dbus
+  user environment. AGS happened to restart then and attached to the nest; once the nest stopped, AGS kept
+  connecting to a socket that no longer existed.
+- **Fix**: restore the environment after `nest up` and after `nest down`. The `down` restore must run
+  **after** the compositor stops, because the exiting nest rewrites the environment once more: it removes
+  the signature but leaves its own `WAYLAND_DISPLAY`.
+- **Didn't work**: Hyprland 0.54 ignores `HYPRLAND_NO_SD_VARS`.
+- **Verified by**: restarting AGS while the nest runs and checking the bar appears on the host, not in the
+  nest.
 
-## 11. nest 被誤認成 host
+## 11. The nest was mistaken for the host
 
-- **根因**：nest 也是一個 Hyprland instance，而且比 host 新。環境變數被剝掉時，「挑最新的 instance」
-  就會挑到 nest。
-- **解法**：辨識 host 時排除 `nest.json` 裡記錄的 signature，並有單元測試覆蓋。
+- **Root cause**: the nest is a Hyprland instance too, and newer than the host. With the environment
+  stripped, "pick the newest instance" picked the nest.
+- **Fix**: exclude the signature recorded in `nest.json` when discovering the host, covered by unit tests.
 
-## 12. 殘留的 helper process
+## 12. Leftover helper processes
 
-- **現象**：nest 關掉後，`pgrep` 還能找到兩個 `Hyprland --config nest.conf`，`ppid=1`。
-- **根因**：nested Hyprland 會 fork helper，主程式結束時它們沒有跟著退出。
-- **解法**：用 nested config 的路徑比對 `/proc/*/cmdline`，找到後 `SIGKILL`。
+- **Symptom**: after the nest stopped, `pgrep` still found two `Hyprland --config nest.conf` processes
+  with `ppid=1`.
+- **Root cause**: the nested Hyprland forks helpers that outlive it.
+- **Fix**: match the nest config path in `/proc/*/cmdline` and `SIGKILL` them.
 
-## 13. 移除 output 會把游標移到螢幕中央（已因 #15 移除 AGENT）
+## 13. Removing an output re-centres the cursor (obsolete: AGENT removed in #15)
 
-- **解法**：`hyprctl output remove` 前先記下游標位置，移除後再移回去。
+- **Fix**: record the cursor position before `hyprctl output remove` and move it back afterwards.
 
-## 14. 讀 YouTube 推薦時遇到的輸入問題
+## 14. Input issues while reading YouTube recommendations
 
-| 現象 | 原因 | 狀態 |
+| Symptom | Cause | Status |
 |---|---|---|
-| `scroll` 在 Firefox 沒有作用 | 推測是 `wlrctl` 送的滾輪事件缺少 discrete 資訊 | 待修；暫時改按 `Page_Down` |
-| 剛開好的頁面，按鍵送不進去 | 鍵盤 focus 還沒落在頁面上 | 待修；暫時先點一下頁面空白處 |
-| 游標移動後網頁的 hover 狀態不變 | `movecursor` 是 warp，不會產生 motion 事件 | ✅ 已修，見 #18 |
+| `scroll` has no effect in Firefox | Probably `wlrctl` scroll events lack discrete wheel information | Open; `Page_Down` works meanwhile |
+| Keys don't reach a freshly loaded page | Keyboard focus isn't on the page yet | Open; click empty page space first |
+| Web page hover states don't follow the cursor | `movecursor` warps without motion events | ✅ Fixed in #18 |
 
-## 15. Headless 螢幕讓兩層 compositor 空轉
+## 15. A headless monitor made two compositors spin
 
-- **現象**：nest 開著時 host Hyprland 約 70%、nested 約 40%，合計超過一顆 CPU 核心。htop 裡看到的
-  是 `Hyprland --watchdog-fd`，容易被誤認成 watchdog 吃資源，其實那就是 host compositor 本體。
-- **排查過程**：
+- **Symptom**: with the nest running, the host Hyprland sat around 70% CPU and the nested one around 40%,
+  over a full core together. htop shows the host as `Hyprland --watchdog-fd`, which is easy to mistake
+  for the watchdog; it is the compositor itself.
+- **Investigation**:
 
-  | 嘗試 | 結果 | 學到的事 |
+  | Attempt | Result | Lesson |
   |---|---|---|
-  | AGENT 從 60Hz 降到 10Hz | 沒效果 | 更新率設定沒有被拿來節流 |
-  | AGENT 從 1080p 降到 720p | 131% → 128% | 不是像素量的問題 |
-  | nested 關掉 blur 和 shadow | 約省 5% | 不是合成效果的問題 |
-  | Firefox `layout.frame_rate = 15` | 沒效果 | 影片 frame 不經過這條路徑 |
-  | 暫停 nested process | host 掉到約 21% | 成本跟著 nested 的 frame 走 |
-  | **開 debug overlay** | **AGENT 674 FPS、nest 492 FPS** | 找到根因 |
+  | AGENT from 60 Hz to 10 Hz | No effect | The refresh setting wasn't throttling anything |
+  | AGENT from 1080p to 720p | 131% → 128% | Not a pixel-count problem |
+  | Blur and shadow off in the nest | ~5% saved | Not a compositing-effects problem |
+  | Firefox `layout.frame_rate = 15` | No effect | Video frames bypass that path |
+  | Pausing the nested process | Host dropped to ~21% | Cost tracks the nest's frames |
+  | **Debug overlay** | **AGENT 674 FPS, nest 492 FPS** | Root cause found |
 
-- **根因**：headless 螢幕沒有 vblank。host 畫完 AGENT 就立刻送 frame callback，nest 收到就立刻畫下一張，
-  兩邊互相觸發，形成沒有節流的迴圈。
-- **解法**：拿掉 AGENT，nest 放在一般的隱藏 workspace，用 exec rule 套用 `render_unfocused on`。
-  隱藏時 host 以 15 FPS 送 callback，總用量從約 130% 降到約 4%。
-- **附帶的坑**：`render_unfocused` 只在視窗建立時生效，事後 `setprop` 沒有用，所以一定要放在 exec rule。
-- **連帶的好處**：#4、#5 的問題直接消失，`super+1` 回到一般的 `workspace 1`，也不再需要切換腳本。
+- **Root cause**: a headless output has no vblank. The host sent a frame callback the instant it finished
+  drawing AGENT, the nest drew its next frame the instant it got one, and each side kept triggering the
+  other with no throttle.
+- **Fix**: drop AGENT, put the nest on an ordinary hidden workspace, and launch it with the exec rule
+  `render_unfocused on`. While hidden the host paces callbacks at 15 FPS, cutting total CPU from ~130% to
+  ~4%.
+- **Related pitfall**: `render_unfocused` only applies when the window is mapped; a later `setprop` has no
+  effect, so it must be an exec rule.
+- **Bonus**: #4 and #5 disappeared outright, `super+1` became a plain `workspace 1` again, and the
+  switch script went away.
 
-## 16. nest 關掉了，裡面的 Firefox 還活著
+## 16. The nest stopped but its Firefox kept running
 
-- **現象**：重啟 nest 後 `open_url` 開不出 Firefox，畫面是空的。
-- **根因**：上一個 nest 的 Firefox 在 nested compositor 結束後沒有退出，被 init 收養，連著一個已經不存在
-  的 display，還佔住 profile lock。Wayland client 不一定會隨著 compositor 結束。
-- **解法**：`nest down` 先用 `/proc/*/environ` 裡的 `HYPRLAND_INSTANCE_SIGNATURE` 找出 nest 裡所有
-  程式，`SIGTERM` 後等 5 秒，還活著才 `SIGKILL`。
-- **附帶的坑**：`pid_alive` 原本把 zombie 當成還活著，`terminate` 就會白等滿 5 秒；改成讀
-  `/proc/PID/stat` 的狀態欄位，`Z` 視為已結束。
+- **Symptom**: after restarting the nest, `open_url` produced no Firefox; the screen stayed empty.
+- **Root cause**: the previous nest's Firefox didn't exit with the nested compositor. It was reparented to
+  init, attached to a display that no longer existed, and still held the profile lock. Wayland clients
+  don't necessarily exit with their compositor.
+- **Fix**: `nest down` first finds every app in the nest by the `HYPRLAND_INSTANCE_SIGNATURE` in
+  `/proc/*/environ`, sends `SIGTERM`, waits up to 5 seconds, then `SIGKILL`s survivors.
+- **Related pitfall**: `pid_alive` counted zombies as alive, so `terminate` always waited out the full 5
+  seconds; it now reads the state field of `/proc/PID/stat` and treats `Z` as dead.
 
-## 17. 其他小坑
+## 17. Smaller pitfalls
 
-| 問題 | 解法 |
+| Problem | Fix |
 |---|---|
-| Hyprland 的 `--socket` 必須搭配 `--wayland-fd`，不能單獨使用 | 不固定 socket 名稱，改從新出現的 lock 檔辨識 nested instance |
-| nested 沒用 `start-hyprland` 啟動，會跳出 watchdog 警告 | `misc:disable_watchdog_warning = true` |
-| Firefox 會把 URL 交給 host 上已經開著的 Firefox | 用獨立的 profile（`--profile`）；Firefox 的 remoting 是以 profile 為單位，所以不會碰到 host 用預設 profile 的 Firefox。早期也加了 `--no-remote`，後來拿掉，見 #19 |
-| `focusworkspaceoncurrentmonitor` 會交換 workspace | 改用 `moveworkspacetomonitor` |
-| Hyprland keybind 不吃 virtual keyboard 送出的按鍵 | agent 改用 `focus_window` 等 IPC tool |
-| 每次開頁面都跳翻譯提示、session 還原分頁 | server 啟動 Firefox 前寫入 `user.js` 關掉這些對話框 |
+| Hyprland's `--socket` only works together with `--wayland-fd` | Don't pin the socket name; identify the nested instance by its newly appeared lock file |
+| A nest not started via `start-hyprland` shows a watchdog warning | `misc:disable_watchdog_warning = true` |
+| Firefox hands URLs to the Firefox already running on the host | A separate profile (`--profile`): Firefox remoting is scoped to the profile, so it never reaches the host's default-profile Firefox. `--no-remote` was used at first and later dropped; see #19 |
+| `focusworkspaceoncurrentmonitor` swaps workspaces | Use `moveworkspacetomonitor` |
+| Hyprland keybinds ignore keystrokes from the virtual keyboard | The agent uses IPC tools such as `focus_window` |
+| Every page load showed a translation prompt or a session-restore tab | The server writes a `user.js` disabling those dialogs before launching Firefox |
 
-## 18. warp 之後的點擊被送錯按鈕
+## 18. Clicks after a warp hit the wrong button
 
-- **現象**：nest 裡 waybar dock 的按鈕，重啟後第一次點擊有效，之後點其他按鈕都沒反應。
-- **根因**：`hyprctl movecursor` 只是 warp，不送 motion 事件。GTK 會用最後一次收到 motion 或 enter 時的
-  位置判斷按到哪個按鈕，所以後續的點擊都被當成點在舊位置。網頁的 hover 不更新也是同一個原因。
-- **解法**：每次 warp 之後，用 wlr-virtual-pointer 送一個來回各 1px 的相對移動（淨位移為零）。drag 的
-  起點也一樣。修好後連續點 dock 的四個按鈕都正確。
+- **Symptom**: the waybar dock in the nest responded to the first click after a restart; later clicks on
+  other buttons did nothing.
+- **Root cause**: `hyprctl movecursor` only warps and sends no motion events. GTK resolves a click against
+  the position of the last motion or enter event, so later clicks landed on the old position. Stale web
+  page hover states had the same cause.
+- **Fix**: after every warp, send a net-zero relative motion (+1px, then -1px) over wlr-virtual-pointer;
+  likewise at the start of a drag. Afterwards four consecutive clicks on different dock buttons all
+  worked.
 
-## 19. 從 nest 開的程式跑到 host
+## 19. Apps launched in the nest opened on the host
 
-- **現象**：在 nest 用 rofi 開 Firefox，視窗出現在 host。
-- **根因**：單一 instance 的程式啟動時，會先找「同一個使用者 profile 是否已經有一個在跑」，有的話就叫它開新
-  視窗然後自己退出。nest 和 host 共用同一條 D-Bus session bus 和同一個家目錄，所以會找到 host 上的
-  instance。實測：kitty（不是單一 instance）、Chrome／Obsidian／Thunar（當時 host 上沒開）都正確開在
-  nest；host 上已經開著的 Firefox、Discord 則會跑去 host。
-- **解法**：
-  - Firefox：用 nest 專用的 profile。原本 `open_url` 還加了 `--no-remote`，但那會讓之後從 dock 啟動的
-    Firefox 連不上 nest 的 instance（變成「Firefox 已經在執行」），所以拿掉，改成只靠 `--profile`。
-    `open_url` 也因此簡化：Firefox 已經開著時，不再模擬 `ctrl+t` 加打字，而是直接執行
-    `firefox --profile <nest profile> <url>`，由 Firefox 自己把網址交給 nest 的 instance。
-  - Thunar：用 `dbus-run-session` 給它一條獨立的 D-Bus。
-  - Electron 程式（Discord、Slack）用的是 profile 目錄裡的 lock 檔，只能另外給一個 profile，通常不值得。
+- **Symptom**: Firefox launched from rofi inside the nest opened its window on the host.
+- **Root cause**: single-instance apps first look for an instance already running on the same user
+  profile and, if found, ask it to open a window and exit. The nest shares the host's D-Bus session bus
+  and home directory, so they find the host's instance. Measured: kitty (not single-instance) and Chrome,
+  Obsidian and Thunar (not running on the host at the time) opened in the nest; Firefox and Discord, which
+  were already running on the host, went there.
+- **Fix**:
+  - Firefox: use the nest profile. `open_url` used to add `--no-remote` as well, but that stopped later
+    launches (e.g. from the dock) from joining the nest's instance ("Firefox is already running"), so it
+    now relies on `--profile` alone. That also simplified `open_url`: with Firefox already running it no
+    longer simulates `ctrl+t` and typing, it just runs `firefox --profile <nest profile> <url>` and lets
+    Firefox hand the URL to the nest's instance.
+  - Thunar: give it a private D-Bus with `dbus-run-session`.
+  - Electron apps (Discord, Slack) use lock files in their profile directory; the only way is a separate
+    profile, which is rarely worth it.
 
-## 開發心得
+## Takeaways
 
-- **每個假設都要實測**：幾乎所有坑都是實際操作時才發現的，例如 frame callback、絕對移動、環境變數被搶。
-- **用最嚴苛的條件測試**：用會剝掉環境變數的 client 測，才會抓到 #1 和 #11。
-- **驗證「使用者沒被影響」**：每次測試前後都記錄 host 的 focus、workspace、游標，而不是只看 agent
-  有沒有成功。
-- **部署環境跟開發環境不同**：#6 只有用 nixos-config 的 nixpkgs 實際 build 才會發現。
+- **Test every assumption for real**: almost every pitfall surfaced only through hands-on use: frame
+  callbacks, absolute motion, the hijacked environment.
+- **Test under the harshest conditions**: only a client that strips the environment exposed #1 and #11.
+- **Verify the user was not affected**: record the host's focus, workspace and cursor before and after
+  every test, not just whether the agent succeeded.
+- **Deployment differs from development**: #6 only showed up when building with nixos-config's nixpkgs.

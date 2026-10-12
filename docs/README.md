@@ -1,30 +1,32 @@
-# hypr-computer-use-mcp 技術文件
+# hypr-computer-use-mcp design notes
 
-這份文件說明 agent（Claude Code、Codex）如何在 Hyprland 上「用電腦」，而且**不跟你搶滑鼠和鍵盤**。
+How an agent (Claude Code, Codex) uses a computer on Hyprland **without fighting you for the mouse and
+keyboard**.
 
-![agent 在 nest 裡用 GIMP 畫的笑臉](images/gimp-smiley.png)
+![A smiley face the agent drew in GIMP inside the nest](images/gimp-smiley.png)
 
-> 上圖：agent 在 nest 裡開 GIMP、新增畫布，用 70 次 `drag` 畫出笑臉。整個過程中，使用者的 focus、
-> workspace、游標都沒有被動到。
+> Above: the agent opened GIMP inside the nest, created a canvas and drew a smiley face with 70 `drag`
+> calls. The user's focus, workspace and cursor were never touched.
 
-## 閱讀順序
+## Reading order
 
-| 文件 | 內容 |
+| Document | Contents |
 |---|---|
-| [architecture.md](architecture.md) | 整體架構、模組分工、一次 tool call 的流程 |
-| [nest.md](nest.md) | 為什麼要 nested Hyprland、隱藏時如何持續 render、生命週期 |
-| [input.md](input.md) | 截圖座標系統、點擊／捲動／打字／拖曳的實作 |
-| [nixos-integration.md](nixos-integration.md) | flake 打包、註冊、ws1 icon、故障排除 |
-| [lessons-learned.md](lessons-learned.md) | 開發過程踩過的坑，以及每個坑的根因和解法 |
+| [architecture.md](architecture.md) | Overall architecture, module responsibilities, the life of a tool call |
+| [nest.md](nest.md) | Why a nested Hyprland, how it keeps rendering while hidden, lifecycle |
+| [input.md](input.md) | Screenshot coordinates; how click, scroll, typing and drag are implemented |
+| [nixos-integration.md](nixos-integration.md) | Flake packaging, registration, wallpaper and dock, status icon, troubleshooting |
+| [lessons-learned.md](lessons-learned.md) | Every pitfall hit during development, with root cause and fix |
 
-## 名稱
+## Naming
 
-**nest** 指的是 agent 專用的 nested Hyprland。早期版本叫它 realm，為了避免跟
-[0xmiki/hypr-realm](https://github.com/0xmiki/hypr-realm)（一個 Hyprland fork）混淆而改名。本專案使用的是
-原版 Hyprland，沒有修改 compositor。
+**nest** is the agent's own nested Hyprland. Early versions called it a *realm*; it was renamed to avoid
+confusion with [0xmiki/hypr-realm](https://github.com/0xmiki/hypr-realm), a Hyprland fork. This project
+runs on stock Hyprland and does not modify the compositor.
 
-## 一句話總結
+## In one paragraph
 
-把 agent 關進一個 **nested Hyprland（nest）**，放在 ws1 的視窗裡，用 `render_unfocused` 讓它在隱藏時
-也以 15 FPS 持續更新；所有截圖和輸入都送進 nest 的 Wayland socket，所以永遠碰不到使用者的 session。
-nest 隱藏時，CPU 總用量大約 4%。
+The agent is confined to a **nested Hyprland (the nest)** in a window on workspace 1. The
+`render_unfocused` window rule keeps it updating at 15 FPS while hidden, and every screenshot and input
+event is addressed to the nest's Wayland socket, so nothing ever reaches the user's session. While
+hidden, the nest costs about 4% CPU in total.

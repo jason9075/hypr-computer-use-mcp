@@ -1,116 +1,121 @@
-# 架構
+# Architecture
 
-## 全貌
+## Overview
 
 ```mermaid
 flowchart LR
-  subgraph agent["Agent（ws10 的 kitty）"]
+  subgraph agent["Agent (kitty on ws10)"]
     CC[Claude Code / Codex]
   end
   subgraph server["hypr-computer-use-mcp"]
     S[server.py<br/>MCP tools]
-    T[target.py<br/>host / nest 辨識]
-    R[nest.py<br/>生命週期]
-    H[hypr.py<br/>外部指令]
-    V[vpointer.py<br/>drag]
+    T[target.py<br/>host / nest discovery]
+    R[nest.py<br/>lifecycle]
+    H[hypr.py<br/>external tools]
+    V[vpointer.py<br/>drag, motion]
   end
-  subgraph host["Host Hyprland（wayland-1）"]
-    HDMI[ws2..10<br/>使用者的 workspace]
-    WS1[ws1（通常隱藏）<br/>render_unfocused 15 FPS]
+  subgraph host["Host Hyprland (wayland-1)"]
+    HDMI[ws2..10<br/>the user's workspaces]
+    WS1[ws1, usually hidden<br/>render_unfocused 15 FPS]
   end
-  subgraph nest["Nest：nested Hyprland（wayland-2）"]
+  subgraph nest["Nest: nested Hyprland (wayland-2)"]
     APP[Firefox / GIMP / ...]
   end
 
   CC -- stdio --> S
   S --> T & R & H & V
   R -- hyprctl dispatch exec --> WS1
-  WS1 -- nest 視窗 --> nest
+  WS1 -- nest window --> nest
   H -- grim / wtype / wlrctl / hyprctl --> nest
   V -- wlr-virtual-pointer --> nest
 ```
 
-Agent 透過 stdio 跟 MCP server 溝通。server 把每個 tool call 轉成對 **nest** 的外部指令
-（`grim`、`wtype`、`wlrctl`、`hyprctl`）或 Wayland 協定呼叫。所有指令都帶著 nest 的
-`WAYLAND_DISPLAY` 和 `HYPRLAND_INSTANCE_SIGNATURE`，因此只會作用在 nest。
+The agent talks to the MCP server over stdio. The server turns each tool call into external commands
+(`grim`, `wtype`, `wlrctl`, `hyprctl`) or Wayland protocol requests aimed at the **nest**. Every command
+carries the nest's `WAYLAND_DISPLAY` and `HYPRLAND_INSTANCE_SIGNATURE`, so it can only act on the nest.
 
-## 模組分工
+## Modules
 
-| 模組 | 職責 | 是否有副作用 |
+| Module | Responsibility | Side effects |
 |---|---|---|
-| `geometry.py` | 截圖座標 ↔ Hyprland 全域 logical 座標（處理位置、scale、旋轉） | 純函式 |
-| `keys.py` | `"ctrl+shift+t"` → `wtype` 參數 | 純函式 |
-| `target.py` | 決定要操作哪個 session（host 或 nest），並產生對應的 env | 只讀 lock 檔 |
-| `hypr.py` | 包裝 `hyprctl`、`grim`、`wtype`、`wlrctl`；每個呼叫都要指定 `Target` | 有 |
-| `nest.py` | nest 的啟動、健康檢查、修復、關閉 | 有 |
-| `vpointer.py` | 透過 wlr-virtual-pointer 做按住拖曳 | 有 |
-| `server.py` | MCP tools 和 CLI（`nest up\|down\|status`） | 有 |
-| `protocols/` | pywayland bindings，**build 時生成**（見 [lessons-learned](lessons-learned.md#6-vendored-bindings-在部署時-import-失敗)） | — |
+| `geometry.py` | Screenshot coordinates ↔ Hyprland global logical coordinates (position, scale, rotation) | Pure |
+| `keys.py` | `"ctrl+shift+t"` → `wtype` arguments | Pure |
+| `target.py` | Decide which session to act on (host or nest) and build its environment | Reads lock files only |
+| `hypr.py` | Wrap `hyprctl`, `grim`, `wtype`, `wlrctl`; every call takes a `Target` | Yes |
+| `nest.py` | Start, health-check, repair and stop the nest | Yes |
+| `vpointer.py` | Press-and-hold drags and real pointer motion via wlr-virtual-pointer | Yes |
+| `server.py` | MCP tools and the CLI (`nest up\|down\|status`) | Yes |
+| `protocols/` | pywayland bindings, **generated at build time** (see [lessons-learned](lessons-learned.md#6-vendored-bindings-failed-to-import-once-deployed)) | — |
 
-設計原則是「純函式在內、副作用在外」：座標換算和按鍵解析都有單元測試，外部指令集中在 `hypr.py`。
+Pure logic lives inside, side effects at the edges: coordinate mapping and key parsing are unit-tested,
+and external commands are concentrated in `hypr.py`.
 
-## `Target`：一切操作的定址方式
+## `Target`: how every action is addressed
 
 ```python
 @dataclass(frozen=True)
 class Target:
   kind: Literal["host", "nest"]
   signature: str          # HYPRLAND_INSTANCE_SIGNATURE
-  wayland_display: str    # 例如 wayland-2
+  wayland_display: str    # e.g. wayland-2
   runtime_dir: str        # $XDG_RUNTIME_DIR
 ```
 
-`hypr.run(*args, target=...)` 會把這三個值覆蓋到子行程的環境變數，所以同一支 `grim` 可以截
-host，也可以截 nest，取決於傳入哪個 `Target`。
+`hypr.run(*args, target=...)` overlays these values onto the child process environment, so the same
+`grim` binary can capture either the host or the nest depending on the `Target` passed in.
 
-### 怎麼找到 host 和 nest
+### Finding the host and the nest
 
-- **nest**：`nest up` 成功後把 signature、display、pid 寫進 `$XDG_RUNTIME_DIR/hypr-cu/nest.json`。
-- **host**：優先使用環境變數；沒有的話，掃描 `$XDG_RUNTIME_DIR/hypr/*/hyprland.lock`
-  （內容是 PID 和 Wayland socket 名稱），挑最新的、還活著的 instance，**但要排除 nest**。
+- **nest**: after `nest up` succeeds, its signature, display and PID are written to
+  `$XDG_RUNTIME_DIR/hypr-cu/nest.json`.
+- **host**: taken from the environment when present; otherwise the newest live instance found by scanning
+  `$XDG_RUNTIME_DIR/hypr/*/hyprland.lock` (each holds the PID and Wayland socket name), **excluding the
+  nest**.
 
-排除 nest 這點很重要：nest 本身也是一個 Hyprland instance，而且比 host 新。Codex 這類 MCP host
-會剝掉環境變數，如果只挑「最新的」，就會把 nest 誤認成 host。
+Excluding the nest matters: it is itself a Hyprland instance, and newer than the host. MCP hosts such as
+Codex strip the environment, so "pick the newest" alone would mistake the nest for the host.
 
-## 一次 tool call 的流程
+## The life of a tool call
 
-以 `click(x=400, y=300)` 為例：
+Taking `click(x=400, y=300)` as an example:
 
 ```mermaid
 sequenceDiagram
   participant A as Agent
   participant S as server.py
   participant R as nest.json
-  participant N as Nest（wayland-2）
+  participant N as Nest (wayland-2)
 
   A->>S: click(400, 300)
-  S->>R: 讀取 nest 狀態
-  S->>S: problem() 健康檢查<br/>（pid 活著？nest 有 output？）
-  S->>S: to_global(viewport, 400, 300)<br/>截圖座標 → logical 座標
+  S->>R: read nest state
+  S->>S: problem() health check<br/>(PID alive? nest has an output?)
+  S->>S: to_global(viewport, 400, 300)<br/>screenshot → logical coordinates
   S->>N: hyprctl dispatch movecursor X Y
+  S->>N: virtual pointer: +1px then -1px<br/>(so clients see the warp)
   S->>N: wlrctl pointer click left
   S-->>A: "left x1 at (400, 300)"
 ```
 
-nest 不健康時（沒啟動、compositor 結束了、視窗被關掉），tool 會回傳明確的錯誤，例如
-`nest window was closed; call start_nest first`，**不會**悄悄改去操作使用者的桌面。
+When the nest is unhealthy (not started, compositor exited, window closed), tools return an explicit error
+such as `nest window was closed; call start_nest first`. They **never** silently fall back to driving the
+user's desktop.
 
-## Tools 一覽
+## Tools
 
-| 類別 | Tools |
+| Category | Tools |
 |---|---|
-| nest 管理 | `start_nest`、`stop_nest` |
-| 開程式 | `open_url`、`launch` |
-| 觀察 | `screenshot`、`list_monitors`、`list_windows`、`cursor_position` |
-| 操作 | `click`、`scroll`、`mouse_move`、`drag`、`type_text`、`key`、`focus_window` |
+| Nest management | `start_nest`, `stop_nest` |
+| Launching | `open_url`, `launch` |
+| Observing | `screenshot`, `list_monitors`, `list_windows`, `cursor_position` |
+| Acting | `click`, `scroll`, `mouse_move`, `drag`, `type_text`, `key`, `focus_window` |
 
-只讀的 tools 有標 `readOnlyHint`，讓 MCP host 可以依此決定權限策略。
+Read-only tools carry `readOnlyHint` so MCP hosts can base permission policy on it.
 
-## 狀態檔
+## State files
 
-| 路徑（`$XDG_RUNTIME_DIR/hypr-cu/`） | 內容 | 用途 |
+| Path (under `$XDG_RUNTIME_DIR/hypr-cu/`) | Contents | Used for |
 |---|---|---|
-| `nest.json` | nest 的 signature、display、PID | server 定位 nest；status bar 判斷 nest 是否在跑 |
-| `activity` | 空檔案，mtime 是最後一次 tool call 的時間 | status bar 判斷 agent 是否正在操作 |
-| `nest.conf` | nested Hyprland 的 config | 由 `nest up` 生成 |
-| `nest.log` | nested Hyprland 的輸出 | 除錯用 |
+| `nest.json` | The nest's signature, display and PID | Locating the nest; status bars showing whether it runs |
+| `activity` | Empty file whose mtime is the last tool call | Status bars showing whether the agent is acting |
+| `nest.conf` | The nested Hyprland config | Generated by `nest up` |
+| `nest.log` | Output of the nested Hyprland | Debugging |
