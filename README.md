@@ -66,6 +66,17 @@ just install          # registers `hypr-computer-use-mcp` from PATH
 just install-dev      # or: `nix run <this checkout>` for development
 ```
 
+## Customising the realm
+
+If `$XDG_CONFIG_HOME/hypr-cu/realm.conf` exists, the realm's generated Hyprland config `source`s
+it, e.g. for a wallpaper and a launcher. Host binds own SUPER and take precedence, so use another
+modifier inside the realm:
+
+```
+exec-once = swaybg -i ~/Pictures/agent-wallpaper.png -m fill
+bind = ALT, F, exec, rofi -show drun
+```
+
 ## CLI
 
 ```sh

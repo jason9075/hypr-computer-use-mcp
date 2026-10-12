@@ -51,6 +51,22 @@ ecosystem {
 """
 
 
+def user_config_path() -> Path:
+  """Optional user additions to the realm's Hyprland config (e.g. a launcher keybind)."""
+  base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+  return Path(base, "hypr-cu", "realm.conf")
+
+
+def nested_config(user_config: Path) -> str:
+  """The realm's config: the bare defaults, plus a `source` of the user's file when present.
+
+  Sourced only if it exists, since Hyprland reports a missing `source` as a config error.
+  """
+  if user_config.is_file():
+    return f"{NESTED_CONFIG}source = {user_config}\n"
+  return NESTED_CONFIG
+
+
 class RealmError(RuntimeError):
   """The realm could not be started or is unusable."""
 
@@ -243,7 +259,7 @@ def up(host: Target) -> Target:
   sdir = state_dir(runtime)
   sdir.mkdir(parents=True, exist_ok=True)
   config, log_file = sdir / "realm.conf", sdir / "realm.log"
-  config.write_text(NESTED_CONFIG)
+  config.write_text(nested_config(user_config_path()))
 
   before = {inst.signature for inst in live_instances(runtime)}
   inner = f"exec Hyprland --config {shlex.quote(str(config))} > {shlex.quote(str(log_file))} 2>&1"

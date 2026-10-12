@@ -2,10 +2,12 @@ import os
 import subprocess
 
 from hypr_computer_use.realm import (
+  NESTED_CONFIG,
   RealmState,
   _write_state,
   activity_path,
   mark_activity,
+  nested_config,
   read_state,
   realm_clients,
   terminate,
@@ -52,3 +54,10 @@ def test_realm_clients_found_by_signature_and_terminated():
     for proc in (inside, outside):
       proc.kill()
       proc.wait()
+
+
+def test_nested_config_sources_user_file_only_when_present(tmp_path):
+  user = tmp_path / "realm.conf"
+  assert nested_config(user) == NESTED_CONFIG
+  user.write_text("bind = ALT, F, exec, rofi -show drun\n")
+  assert nested_config(user).endswith(f"source = {user}\n")
