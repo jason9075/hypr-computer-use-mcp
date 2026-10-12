@@ -48,27 +48,29 @@ nest 在 ws1，是一個普通的 workspace，`super+1` 就能切過去看，按
 > 早期版本需要一台 headless 螢幕 `AGENT`、對應的 monitor rule，以及特製的 `nest_ws.sh` 來處理
 > `super+1`。這些都因為效能問題而拿掉了，見 [nest.md](nest.md#為什麼不用-headless-螢幕舊設計)。
 
-## 4. 自訂 nest：桌布和啟動器
+## 4. 自訂 nest：桌布和 dock
 
 nest 啟動時，如果 `$XDG_CONFIG_HOME/hypr-cu/nest.conf` 存在，會用 `source` 把它載入 nested Hyprland 的
 config。檔案不存在時就不加 `source`，因為 Hyprland 會把找不到的 `source` 當成 config 錯誤。
 
-taipei 用 Home Manager 產生這個檔案：
+taipei 用一個 Home Manager 模組（`home/gui/agent-nest.nix`）產生這個檔案：
 
 ```nix
 xdg.configFile."hypr-cu/nest.conf".text = ''
   exec-once = ${pkgs.swaybg}/bin/swaybg -i ${../../assets/agent-nest-wallpaper.png} -m fill
-  bind = ALT, F, exec, rofi -show drun -show-icons
+  exec-once = ${pkgs.waybar}/bin/waybar -c ${dockConfig} -s ${dockStyle}
 '';
 ```
 
 - **桌布**：nested Hyprland 預設是全黑的背景，所以在 nest 裡跑 `swaybg` 顯示 agent 專用桌布，上面印著
   操作提示。
-- **啟動器**：host 的快捷鍵佔用了 SUPER，而且優先於 nest，所以 nest 裡的快捷鍵改用 ALT。
+- **dock**：nest 底部用 `waybar` 放一條小 dock，有兩個按鈕：󰀻 開 rofi、󰅖 關閉 nest 裡 focus 中的視窗。
+  一開始用的是快捷鍵（`alt+f`），後來改成 dock，原因有兩個：host 的快捷鍵佔用了 SUPER 而且優先於 nest，
+  而且 nest 裡沒有 `super+q`（在 host 上它關的是整個 nest 的外層視窗），需要另一種關閉視窗的方式。
 - **注意**：從 nest 的 rofi 開 Firefox，會開在你主力的 Firefox 裡，因為沒有帶 `--no-remote` 和 nest
   的 profile。要在 nest 開網頁請用 agent 的 `open_url`。
-- **關閉程式**：nest 裡的程式要用它自己的方式關（✕ 或 `ctrl+q`）。在 ws1 按 `super+q` 關的是整個
-  nest 的外層視窗，裡面的程式會留在背景，要用 `nest down` 才會完整清掉。
+- **關閉程式**：用 dock 的 󰅖，或程式自己的 ✕ / `ctrl+q`。在 ws1 按 `super+q` 關的是整個 nest 的外層
+  視窗，裡面的程式會留在背景，要用 `nest down` 才會完整清掉。
 
 ## 5. Robot icon 顯示 agent 狀態
 

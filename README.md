@@ -69,12 +69,12 @@ just install-dev      # or: `nix run <this checkout>` for development
 ## Customising the nest
 
 If `$XDG_CONFIG_HOME/hypr-cu/nest.conf` exists, the nest's generated Hyprland config `source`s
-it, e.g. for a wallpaper and a launcher. Host binds own SUPER and take precedence, so use another
-modifier inside the nest:
+it, e.g. for a wallpaper and a small dock. Host binds own SUPER and take precedence over the nest,
+so clickable controls work better than keybinds:
 
 ```
 exec-once = swaybg -i ~/Pictures/agent-wallpaper.png -m fill
-bind = ALT, F, exec, rofi -show drun
+exec-once = waybar -c ~/.config/hypr-cu/dock.json -s ~/.config/hypr-cu/dock.css
 ```
 
 ## CLI
