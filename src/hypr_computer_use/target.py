@@ -59,7 +59,13 @@ def runtime_dir(environ: Mapping[str, str]) -> str:
 
 
 def pid_alive(pid: int) -> bool:
-  return pid > 0 and Path("/proc", str(pid)).exists()
+  """Whether `pid` is running; an exited-but-unreaped zombie counts as dead."""
+  try:
+    stat = Path("/proc", str(pid), "stat").read_text()
+  except OSError:
+    return False
+  # The state field follows the parenthesised command name, which may itself contain spaces.
+  return pid > 0 and stat[stat.rindex(")") + 2] != "Z"
 
 
 def live_instances(runtime: str) -> list[Instance]:

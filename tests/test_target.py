@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from hypr_computer_use.target import Target, TargetError, host_target, live_instances
+from hypr_computer_use.target import Target, TargetError, host_target, live_instances, pid_alive
 
 
 def _instance(runtime, sig, pid, display):
@@ -57,3 +57,19 @@ def test_target_env_and_socket():
   env = t.env({"PATH": "/bin", "WAYLAND_DISPLAY": "wayland-1"})
   assert env["WAYLAND_DISPLAY"] == "wayland-2" and env["PATH"] == "/bin"
   assert t.socket_path == "/run/user/1000/wayland-2"
+
+
+def test_pid_alive_treats_zombies_as_dead():
+  import subprocess
+  import time
+
+  proc = subprocess.Popen(["true"])
+  # Not waited on yet, so it lingers as a zombie once it exits.
+  for _ in range(50):
+    if not pid_alive(proc.pid):
+      break
+    time.sleep(0.02)
+  assert not pid_alive(proc.pid)
+  proc.wait()
+  assert pid_alive(os.getpid())
+  assert not pid_alive(0)

@@ -15,8 +15,8 @@ flowchart LR
     V[vpointer.py<br/>drag]
   end
   subgraph host["Host Hyprland（wayland-1）"]
-    HDMI[HDMI-A-1<br/>使用者的 workspace]
-    AGENT[AGENT headless 螢幕<br/>-10000x0]
+    HDMI[ws2..10<br/>使用者的 workspace]
+    WS1[ws1（通常隱藏）<br/>render_unfocused 15 FPS]
   end
   subgraph realm["Realm：nested Hyprland（wayland-2）"]
     APP[Firefox / GIMP / ...]
@@ -24,8 +24,8 @@ flowchart LR
 
   CC -- stdio --> S
   S --> T & R & H & V
-  R -- hyprctl output create / exec --> AGENT
-  AGENT -- ws1 顯示 realm 視窗 --> realm
+  R -- hyprctl dispatch exec --> WS1
+  WS1 -- realm 視窗 --> realm
   H -- grim / wtype / wlrctl / hyprctl --> realm
   V -- wlr-virtual-pointer --> realm
 ```
@@ -85,14 +85,14 @@ sequenceDiagram
 
   A->>S: click(400, 300)
   S->>R: 讀取 realm 狀態
-  S->>S: problem() 健康檢查<br/>（pid 活著？AGENT 螢幕在？realm 有 output？）
+  S->>S: problem() 健康檢查<br/>（pid 活著？realm 有 output？）
   S->>S: to_global(viewport, 400, 300)<br/>截圖座標 → logical 座標
   S->>N: hyprctl dispatch movecursor X Y
   S->>N: wlrctl pointer click left
   S-->>A: "left x1 at (400, 300)"
 ```
 
-realm 不健康時（沒啟動、視窗被關掉、AGENT 螢幕不見了），tool 會回傳明確的錯誤，例如
+realm 不健康時（沒啟動、compositor 結束了、視窗被關掉），tool 會回傳明確的錯誤，例如
 `realm window was closed; call start_realm first`，**不會**悄悄改去操作使用者的桌面。
 
 ## Tools 一覽

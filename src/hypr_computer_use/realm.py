@@ -1,13 +1,18 @@
-"""Lifecycle of the agent realm: a nested Hyprland whose window lives on a headless host monitor.
+"""Lifecycle of the agent realm: a nested Hyprland in a window on an ordinary host workspace.
 
-Hyprland stops rendering windows on hidden workspaces, and a nested compositor only draws when
-its host window is shown. Parking the realm's workspace on a headless monitor keeps it "visible"
-(and so rendering) while the human works elsewhere; the nested instance gives the agent its own
-seat, cursor and focus, so it never touches the human's input.
+The nested instance gives the agent its own seat, cursor and focus, so it never touches the
+human's input. Its host window usually sits on a hidden workspace, where Hyprland would stop
+sending it frame callbacks and the nested compositor would stall; the `render_unfocused` window
+rule keeps callbacks coming at `misc:render_unfocused_fps` (15 by default) instead.
+
+An earlier design parked the realm on a headless monitor to keep it "visible". Headless outputs
+have no vblank, so host and realm ping-ponged frames unthrottled (~500-700 FPS, about 1.3 CPU
+cores); the rule-based approach costs a few percent.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -23,10 +28,6 @@ from .target import Target, live_instances, pid_alive
 log = logging.getLogger(__name__)
 
 REALM_WS = int(os.environ.get("HYPR_CU_REALM_WS", "1"))
-REALM_MONITOR = os.environ.get("HYPR_CU_REALM_MONITOR", "AGENT")
-REALM_MODE = os.environ.get("HYPR_CU_REALM_MODE", "1920x1080@60")
-# Not adjacent to any real monitor, so the human's cursor can never wander onto it.
-REALM_POSITION = "-10000x0"
 STARTUP_TIMEOUT_S = 20.0
 RECLAIM_WINDOW_S = 5.0
 
@@ -104,8 +105,6 @@ def problem(host: Target, state: RealmState | None) -> str | None:
     return "realm is not started"
   if not pid_alive(state.pid):
     return "realm compositor has exited"
-  if not any(m["name"] == REALM_MONITOR for m in hypr.monitors(host)):
-    return f"headless monitor {REALM_MONITOR} is gone"
   # The nested instance survives its host window being closed, but then has no outputs.
   if not hypr.monitors(as_target(state, host.runtime_dir)):
     return "realm window was closed"
@@ -157,41 +156,43 @@ def _reclaim_after_start(host: Target, state: RealmState) -> None:
     time.sleep(0.1)
 
 
-def _ensure_monitor(host: Target) -> None:
-  if not any(m["name"] == REALM_MONITOR for m in hypr.monitors(host)):
-    hypr.run("hyprctl", "output", "create", "headless", REALM_MONITOR, target=host)
-  # Re-applied every time: a config reload drops runtime keywords and lets Hyprland place the
-  # monitor next to the real ones.
-  hypr.keyword(host, "monitor", f"{REALM_MONITOR},{REALM_MODE},{REALM_POSITION},1")
+CLIENT_GRACE_S = 5.0
 
 
-def park_workspace(host: Target) -> None:
-  """Make the realm workspace the active one on the headless monitor, without moving the human.
+def realm_clients(signature: str) -> list[int]:
+  """PIDs of programs launched inside the realm, found by the instance signature they inherit.
 
-  Showing a workspace on a monitor requires focusing that monitor, which also warps the cursor,
-  so focus and cursor are restored in the same atomic batch.
+  They are not reliably children of the compositor (a dying parent hands them to init), and
+  Wayland clients may outlive their compositor: a realm Firefox kept running, holding its
+  profile lock, after the nested instance exited.
   """
-  mons = hypr.monitors(host)
-  agent = next(m for m in mons if m["name"] == REALM_MONITOR)
-  if agent["activeWorkspace"]["id"] == REALM_WS:
-    return
-  focused = next(m["name"] for m in mons if m["focused"])
-  window = hypr.active_window(host).get("address")
-  x, y = hypr.cursor_pos(host)
-  commands = [
-    f"dispatch moveworkspacetomonitor {REALM_WS} {REALM_MONITOR}",
-    f"dispatch focusmonitor {REALM_MONITOR}",
-    f"dispatch workspace {REALM_WS}",
-    f"dispatch focusmonitor {focused}",
-  ]
-  if window:
-    commands.append(f"dispatch focuswindow address:{window}")
-  commands.append(f"dispatch movecursor {x} {y}")
-  # moveworkspacetomonitor fails harmlessly when the workspace doesn't exist yet.
-  try:
-    hypr.batch(host, *commands)
-  except hypr.CommandError:
-    hypr.batch(host, *commands[1:])
+  needle = f"HYPRLAND_INSTANCE_SIGNATURE={signature}\0".encode()
+  me = os.getpid()
+  found = []
+  for proc in Path("/proc").iterdir():
+    if not proc.name.isdigit() or int(proc.name) == me:
+      continue
+    try:
+      if needle in (proc / "environ").read_bytes() + b"\0":
+        found.append(int(proc.name))
+    except OSError:
+      continue
+  return found
+
+
+def _signal_all(pids: list[int], sig: signal.Signals) -> None:
+  for pid in pids:
+    with contextlib.suppress(ProcessLookupError):
+      os.kill(pid, sig)
+
+
+def terminate(pids: list[int], grace_s: float = CLIENT_GRACE_S) -> None:
+  """SIGTERM, then SIGKILL whatever is still alive after `grace_s` (lets apps save state)."""
+  _signal_all(pids, signal.SIGTERM)
+  deadline = time.monotonic() + grace_s
+  while any(pid_alive(pid) for pid in pids) and time.monotonic() < deadline:
+    time.sleep(0.1)
+  _signal_all(pids, signal.SIGKILL)
 
 
 def _kill_leftovers(config: Path) -> None:
@@ -208,6 +209,8 @@ def _kill_leftovers(config: Path) -> None:
 
 
 def _stop_compositor(state: RealmState, runtime: str) -> None:
+  # Close apps while their display still exists so they can shut down cleanly.
+  terminate(realm_clients(state.signature))
   if not pid_alive(state.pid):
     _kill_leftovers(state_dir(runtime) / "realm.conf")
     return
@@ -237,9 +240,6 @@ def up(host: Target) -> Target:
   if state is not None:
     _stop_compositor(state, runtime)
 
-  _ensure_monitor(host)
-  park_workspace(host)
-
   sdir = state_dir(runtime)
   sdir.mkdir(parents=True, exist_ok=True)
   config, log_file = sdir / "realm.conf", sdir / "realm.log"
@@ -247,7 +247,9 @@ def up(host: Target) -> Target:
 
   before = {inst.signature for inst in live_instances(runtime)}
   inner = f"exec Hyprland --config {shlex.quote(str(config))} > {shlex.quote(str(log_file))} 2>&1"
-  hypr.dispatch(host, "exec", f"[workspace {REALM_WS} silent] sh -c {shlex.quote(inner)}")
+  # Exec rules apply at map time only; render_unfocused set later would not take effect.
+  rules = f"workspace {REALM_WS} silent; render_unfocused on"
+  hypr.dispatch(host, "exec", f"[{rules}] sh -c {shlex.quote(inner)}")
 
   deadline = time.monotonic() + STARTUP_TIMEOUT_S
   while time.monotonic() < deadline:
@@ -268,17 +270,12 @@ def up(host: Target) -> Target:
 
 
 def down(host: Target) -> None:
-  """Stop the realm and remove its headless monitor. Safe to call when nothing is running."""
+  """Stop the realm. Safe to call when nothing is running."""
   runtime = host.runtime_dir
   state = read_state(runtime)
   if state is not None:
     _stop_compositor(state, runtime)
     # After the stop: the exiting compositor rewrites the environment one last time.
     reclaim_activation_env(host, state)
-  if any(m["name"] == REALM_MONITOR for m in hypr.monitors(host)):
-    # Removing an output re-centres the cursor; put the human's cursor back.
-    x, y = hypr.cursor_pos(host)
-    hypr.run("hyprctl", "output", "remove", REALM_MONITOR, target=host)
-    hypr.move_cursor(host, x, y)
   (state_dir(runtime) / "realm.json").unlink(missing_ok=True)
   activity_path(runtime).unlink(missing_ok=True)

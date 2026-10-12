@@ -22,16 +22,17 @@
 - **現象**：realm 放在隱藏的 workspace，`grim` 截圖直接卡死。
 - **根因**：host 不會送 frame callback 給看不見的視窗，nested compositor 就不會畫新的 frame，
   screencopy 永遠等不到。
-- **解法**：開一台 headless 螢幕 `AGENT`，讓 realm 的 workspace 成為它的 active workspace。
-  詳見 [realm.md](realm.md#為什麼一定要-headless-螢幕)。
+- **第一個解法**：開一台 headless 螢幕 `AGENT`，讓 realm 的 workspace 成為它的 active workspace。
+  能動，但造成 #4、#5 和 #15。
+- **最終解法**：window rule `render_unfocused`，見 #15。
 
-## 4. Config reload 把 AGENT 移到你的螢幕旁邊
+## 4. Config reload 把 AGENT 移到你的螢幕旁邊（已因 #15 移除 AGENT）
 
 - **現象**：`nh home switch` 之後，AGENT 從 `-10000x0` 變成 `1920x0`（緊貼實體螢幕），scale 也變成 2。
 - **根因**：`hyprctl keyword monitor` 是 runtime 設定，config reload 時會被清掉。
 - **解法**：把 monitor rule 寫進 Hyprland config；`realm up` 也會每次重新套用。
 
-## 5. 使用者被困在看不見的螢幕
+## 5. 使用者被困在看不見的螢幕（已因 #15 移除 AGENT）
 
 - **現象**：使用者按了 `super+1`，畫面完全沒反應，鍵盤也沒作用，最後只好登出。
 - **根因**：原本的 `super+1` 是 `workspace 1`，而 ws1 在 AGENT 上，focus 就跑到看不見的螢幕。
@@ -92,11 +93,53 @@
 - **根因**：nested Hyprland 會 fork helper，主程式結束時它們沒有跟著退出。
 - **解法**：用 nested config 的路徑比對 `/proc/*/cmdline`，找到後 `SIGKILL`。
 
-## 13. 移除 output 會把游標移到螢幕中央
+## 13. 移除 output 會把游標移到螢幕中央（已因 #15 移除 AGENT）
 
 - **解法**：`hyprctl output remove` 前先記下游標位置，移除後再移回去。
 
-## 14. 其他小坑
+## 14. 讀 YouTube 推薦時遇到的輸入問題（待修）
+
+| 現象 | 推測原因 | 暫時做法 |
+|---|---|---|
+| `scroll` 在 Firefox 沒有作用 | `wlrctl` 送的滾輪事件缺少 discrete 資訊 | 改按 `Page_Down` |
+| 剛開好的頁面，按鍵送不進去 | 鍵盤 focus 還沒落在頁面上 | 先點一下頁面空白處 |
+| 游標移動後網頁的 hover 狀態不變 | `movecursor` 是 warp，不會產生 motion 事件 | 無 |
+
+這三個都可以改用 wlr-virtual-pointer 送出真正的 motion 和 discrete scroll 來解決。
+
+## 15. Headless 螢幕讓兩層 compositor 空轉
+
+- **現象**：realm 開著時 host Hyprland 約 70%、nested 約 40%，合計超過一顆 CPU 核心。htop 裡看到的
+  是 `Hyprland --watchdog-fd`，容易被誤認成 watchdog 吃資源，其實那就是 host compositor 本體。
+- **排查過程**：
+
+  | 嘗試 | 結果 | 學到的事 |
+  |---|---|---|
+  | AGENT 從 60Hz 降到 10Hz | 沒效果 | 更新率設定沒有被拿來節流 |
+  | AGENT 從 1080p 降到 720p | 131% → 128% | 不是像素量的問題 |
+  | nested 關掉 blur 和 shadow | 約省 5% | 不是合成效果的問題 |
+  | Firefox `layout.frame_rate = 15` | 沒效果 | 影片 frame 不經過這條路徑 |
+  | 暫停 nested process | host 掉到約 21% | 成本跟著 nested 的 frame 走 |
+  | **開 debug overlay** | **AGENT 674 FPS、realm 492 FPS** | 找到根因 |
+
+- **根因**：headless 螢幕沒有 vblank。host 畫完 AGENT 就立刻送 frame callback，realm 收到就立刻畫下一張，
+  兩邊互相觸發，形成沒有節流的迴圈。
+- **解法**：拿掉 AGENT，realm 放在一般的隱藏 workspace，用 exec rule 套用 `render_unfocused on`。
+  隱藏時 host 以 15 FPS 送 callback，總用量從約 130% 降到約 4%。
+- **附帶的坑**：`render_unfocused` 只在視窗建立時生效，事後 `setprop` 沒有用，所以一定要放在 exec rule。
+- **連帶的好處**：#4、#5 的問題直接消失，`super+1` 回到一般的 `workspace 1`，也不再需要切換腳本。
+
+## 16. realm 關掉了，裡面的 Firefox 還活著
+
+- **現象**：重啟 realm 後 `open_url` 開不出 Firefox，畫面是空的。
+- **根因**：上一個 realm 的 Firefox 在 nested compositor 結束後沒有退出，被 init 收養，連著一個已經不存在
+  的 display，還佔住 profile lock。Wayland client 不一定會隨著 compositor 結束。
+- **解法**：`realm down` 先用 `/proc/*/environ` 裡的 `HYPRLAND_INSTANCE_SIGNATURE` 找出 realm 裡所有
+  程式，`SIGTERM` 後等 5 秒，還活著才 `SIGKILL`。
+- **附帶的坑**：`pid_alive` 原本把 zombie 當成還活著，`terminate` 就會白等滿 5 秒；改成讀
+  `/proc/PID/stat` 的狀態欄位，`Z` 視為已結束。
+
+## 17. 其他小坑
 
 | 問題 | 解法 |
 |---|---|
@@ -105,7 +148,7 @@
 | Firefox 會把 URL 交給 host 上已經開著的 Firefox | 加上 `--no-remote` 和獨立的 profile |
 | `focusworkspaceoncurrentmonitor` 會交換 workspace | 改用 `moveworkspacetomonitor` |
 | Hyprland keybind 不吃 virtual keyboard 送出的按鍵 | agent 改用 `focus_window` 等 IPC tool |
-| 把 AGENT 降到 10Hz，CPU 用量不變 | 瓶頸不在更新率；改成提醒 agent 做完事要 `stop_realm` |
+| 每次開頁面都跳翻譯提示、session 還原分頁 | server 啟動 Firefox 前寫入 `user.js` 關掉這些對話框 |
 
 ## 開發心得
 

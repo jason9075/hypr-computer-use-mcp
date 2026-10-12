@@ -1,12 +1,14 @@
 """MCP server exposing computer-use tools for a Hyprland session.
 
-By default every tool acts on the *realm*: a nested Hyprland on a headless monitor that gives the
-agent its own seat, cursor and focus. Set HYPR_CU_TARGET=host to drive the user's own desktop.
+By default every tool acts on the *realm*: a nested Hyprland in a window on its own workspace that
+gives the agent its own seat, cursor and focus. Set HYPR_CU_TARGET=host to drive the user's own
+desktop.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import shlex
@@ -40,7 +42,8 @@ _REALM_GUIDE = (
   f"{realm.REALM_WS}, with its own cursor and keyboard focus, so you never disturb the user. "
   "Call `start_realm` first if it is not running, then open apps with `open_url` or `launch`. "
   "The user can watch or take over by switching to that workspace; call `stop_realm` when the "
-  "task is done to free resources (it costs about one CPU core while running)."
+  "task is done. While hidden the realm renders at about 15 FPS, so allow a moment after acting "
+  "before judging a screenshot."
 )
 _HOST_GUIDE = (
   "You control the user's LIVE desktop: clicks and keystrokes go to whatever they are using."
@@ -97,9 +100,26 @@ def _move(target: Target, x: int, y: int) -> None:
   time.sleep(SETTLE_S)
 
 
+# Prompts that would otherwise cost the agent a screenshot-and-click on every launch.
+FIREFOX_PREFS = {
+  "browser.sessionstore.resume_from_crash": False,  # realm stops kill Firefox
+  "browser.translations.automaticallyPopup": False,
+  "browser.aboutwelcome.enabled": False,
+  "datareporting.policy.dataSubmissionPolicyBypassNotification": True,
+  "layout.frame_rate": -1,  # undo an earlier cap; video ignores it and hidden realms run at 15
+}
+
+
 def _firefox_profile() -> Path:
+  """The realm's persistent Firefox profile, with agent-friendly prefs (re)applied."""
   data = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
-  return Path(data, "hypr-cu", "firefox-profile")
+  profile = Path(data, "hypr-cu", "firefox-profile")
+  profile.mkdir(parents=True, exist_ok=True)
+  lines = [f"user_pref({json.dumps(k)}, {json.dumps(v)});" for k, v in FIREFOX_PREFS.items()]
+  (profile / "user.js").write_text(
+    "// Managed by hypr-computer-use-mcp.\n" + "\n".join(lines) + "\n"
+  )
+  return profile
 
 
 @mcp.tool(annotations=ACTION)
@@ -133,7 +153,6 @@ def open_url(url: str) -> str:
     hypr.wtype(target, *wtype_args("Return"))
     return f"opened {url} in a new tab"
   profile = _firefox_profile()
-  profile.mkdir(parents=True, exist_ok=True)
   # --no-remote: otherwise Firefox hands the URL to the user's own instance on the host.
   cmd = shlex.join(["firefox", "--no-remote", "--profile", str(profile), url])
   hypr.dispatch(target, "exec", cmd)

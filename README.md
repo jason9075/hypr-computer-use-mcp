@@ -7,37 +7,33 @@ fighting you for the mouse and keyboard.
 
 ## How it works: the realm
 
-By default the agent works in a **realm**: a nested Hyprland instance whose window sits on
-workspace 1 of a headless monitor (`AGENT`).
+By default the agent works in a **realm**: a nested Hyprland instance running in a window on
+workspace 1.
 
 ```
 your Hyprland (wayland-1)
-├── HDMI-A-1 … your workspaces, your cursor, your focus — untouched
-└── AGENT (headless, at -10000x0) → workspace 1 → nested Hyprland (wayland-2)
-                                                 ├── own seat, cursor, keyboard focus
-                                                 └── agent's Firefox (persistent profile)
+├── ws2..10 … your workspaces, your cursor, your focus — untouched
+└── ws1 (usually hidden) → realm window → nested Hyprland (wayland-2)
+                                          ├── own seat, cursor, keyboard focus
+                                          └── agent's Firefox (persistent profile)
 ```
 
-Why this shape:
-
-- Hyprland stops rendering windows on hidden workspaces, and a nested compositor only draws
-  while its window is shown. Parking the realm on a headless monitor keeps it rendering while
-  you work elsewhere.
-- The headless monitor is not adjacent to any real one, so your cursor can never wander onto it.
 - All screenshots and input are addressed to the nested display, so nothing reaches your session.
+- A hidden workspace normally stops receiving frame callbacks, which would stall the nested
+  compositor. The realm window is launched with the `render_unfocused` rule, so Hyprland keeps
+  driving it at `misc:render_unfocused_fps` (15) while you work elsewhere.
+- Watch or take over by switching to workspace 1 like any other workspace.
 
-Watch or take over by bringing workspace 1 onto your monitor (see
-[nixos-config `realm_ws.sh`](https://github.com/jason9075/nixos-config) for a `super+1..0`
-binding that does this and parks it again).
-
-Cost: roughly one CPU core while a realm runs (host + nested compositing), so stop it when idle.
+Cost while hidden: about 4% CPU (host + nested). An earlier design parked the realm on a headless
+monitor instead; with no vblank to pace it, the two compositors ping-ponged frames at ~500-700 FPS
+for over a full core. See [docs/realm.md](docs/realm.md).
 
 ## Tools
 
 | Tool | Notes |
 |---|---|
-| `start_realm` / `stop_realm` | Idempotent; `start_realm` also repairs a realm whose window was closed |
-| `open_url` | Realm Firefox with a persistent profile (`$XDG_DATA_HOME/hypr-cu/firefox-profile`), so logins survive restarts |
+| `start_realm` / `stop_realm` | Idempotent; `start_realm` also repairs a realm whose window was closed; `stop_realm` also closes the apps inside |
+| `open_url` | Realm Firefox with a persistent profile (`$XDG_DATA_HOME/hypr-cu/firefox-profile`), so logins survive restarts; prompts like session restore and translation are pre-disabled |
 | `launch` | Start any program in the session |
 | `screenshot`, `list_monitors`, `list_windows`, `cursor_position` | Read-only |
 | `click`, `scroll`, `mouse_move`, `drag`, `type_text`, `key`, `focus_window` | x/y are pixels of the latest screenshot |
@@ -63,12 +59,6 @@ inputs.hypr-computer-use-mcp = {
 home.packages = [ inputs.hypr-computer-use-mcp.packages.${pkgs.system}.default ];
 ```
 
-Recommended Hyprland config, so a config reload doesn't move the headless monitor next to yours:
-
-```
-monitor = AGENT, 1920x1080@60, -10000x0, 1
-```
-
 Register with Claude Code and Codex (their configs are mutable, so this stays imperative):
 
 ```sh
@@ -91,8 +81,6 @@ hypr-computer-use-mcp realm down
 |---|---|---|
 | `HYPR_CU_TARGET` | `realm` | `host` drives your live desktop instead (no isolation) |
 | `HYPR_CU_REALM_WS` | `1` | Host workspace holding the realm window |
-| `HYPR_CU_REALM_MONITOR` | `AGENT` | Name of the headless monitor |
-| `HYPR_CU_REALM_MODE` | `1920x1080@60` | Headless monitor mode |
 | `HYPR_CU_MAX_EDGE` | `1280` | Long edge of screenshots in pixels |
 | `HYPR_CU_LOG` | `WARNING` | Python log level (stderr) |
 
